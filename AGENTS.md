@@ -1,13 +1,13 @@
-# Project Development Rules
+# 项目开发规则
 
-For feature work in this repository, use this order:
+在本仓库中进行功能开发时，请按以下顺序执行：
 
-1. Before implementation, prove the real operation path to the user: entry point → user or agent action → data change or other side effect → observable result. Cite the actual component, API, and file involved, or demonstrate the path in the product. This proof is not a test.
-2. Implement the requested main path with the smallest direct change that makes it work.
-3. After implementation, demonstrate or verify only that direct operation path and give the result to the user for confirmation.
-4. Before the user confirms the feature works, do not proactively add guardrails, mutation or regression tests, legacy compatibility protection, defensive extensions, or speculative fallback behavior.
-5. User confirmation does not automatically authorize that follow-up work. Add targeted protection or tests only when the user explicitly asks for them, or when the user reports a concrete failure scenario that requires them.
+1. 实现前，向用户证明真实的操作路径：入口 → 用户或 Agent 操作 → 数据变化或其他副作用 → 可观察结果。引用实际涉及的组件、API 和文件，或直接在产品中演示该路径。这种证明不等同于测试。
+2. 以最小且直接的改动实现用户要求的主路径，确保它能够工作。
+3. 实现后，只演示或验证这条直接操作路径，并将结果交给用户确认。
+4. 在用户确认功能有效之前，不要主动添加防护措施、变更测试或回归测试、旧版本兼容保护、防御性扩展，也不要增加推测性的回退行为。
+5. 用户确认并不自动授权上述后续工作。只有用户明确提出要求，或用户报告了需要处理的具体失败场景时，才添加有针对性的保护或测试。
 
-The primary objective is to make the requested function work. Focus on the feature implementation itself and avoid over-design; safety, guardrails, and testing must not dominate the work or turn the feature into a surrounding engineering project. This rule supersedes the earlier standing instruction that every feature must be developed test-first. Test-first language in older issues does not apply unless the user restates it for that issue after this rule.
+首要目标是让用户要求的功能正常工作。聚焦功能实现本身，避免过度设计；安全措施、防护和测试不得喧宾夺主，也不得把功能开发演变成周边工程项目。本规则取代之前长期有效的“所有功能都必须测试先行”要求。旧议题中的测试先行表述不再适用，除非用户在本规则生效后针对该议题重新提出这一要求。
 
-This ordering does not waive higher-priority safety or security requirements. Keep validation that is necessary at real external boundaries, such as user input or external APIs, but do not expand it into hypothetical protection beyond the requested path.
+上述顺序不豁免更高优先级的安全或信息安全要求。在真实的外部边界（例如用户输入或外部 API）保留必要验证，但不要将其扩展为超出所请求路径的假设性保护。
