@@ -12,8 +12,16 @@ export const TASK_PRIORITIES = ["none", "urgent", "high", "medium", "low"] as co
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type ActorType = "user" | "agent";
-export type AssigneeTarget = "current-user" | "codex-agent";
+import type { AgentKind, AssigneeTarget } from "../../shared/agents.mjs";
+
+export type { AgentKind, AssigneeTarget };
 export type IssueRelationType = "parent" | "blocks" | "blocked_by" | "related";
+
+export interface AgentSession {
+  agentKind: AgentKind;
+  sessionId: string;
+  updatedAt: string;
+}
 
 export interface ActorIdentity {
   type: ActorType;
@@ -203,6 +211,8 @@ export interface Task {
   labels: string[];
   sortOrder: number;
   threadId: string | null;
+  /** One current session per agent. Only the single-task endpoint returns it. */
+  agentSessions?: AgentSession[];
   creatorType: ActorType;
   creatorId: string;
   creatorName: string;

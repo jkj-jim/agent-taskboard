@@ -1,3 +1,10 @@
+import {
+  ASSIGNEE_TARGETS,
+  DEFAULT_AGENT_KIND,
+  agentByAssigneeTarget,
+  agentByKind,
+  isAssigneeTarget,
+} from "../../shared/agents.mjs";
 import { normalizeWorkflowSnapshot } from "../../shared/workflow-control-flow.mjs";
 
 const JSON_BODY_LIMIT = 1024 * 1024;
@@ -259,11 +266,11 @@ function parseWorkflowId(value) {
 
 function parseAssigneeTarget(value) {
   if (value === undefined) return undefined;
-  if (!["current-user", "codex-agent"].includes(value)) {
+  if (!isAssigneeTarget(value)) {
     throw new ApiError(
       400,
       "INVALID_FIELD",
-      "'assigneeTarget' must be current-user or codex-agent",
+      `'assigneeTarget' must be one of ${ASSIGNEE_TARGETS.join(", ")}`,
     );
   }
   return value;
@@ -355,11 +362,11 @@ async function authenticate(request, env) {
   });
   const userId = `basic:${encodeURIComponent(username.toLowerCase())}`;
   if (request.headers.get("x-taskboard-client") === "taskctl") {
+    // Older CLIs send no agent header; they were always Codex.
+    const agent = agentByKind(request.headers.get("x-taskboard-agent") ?? DEFAULT_AGENT_KIND);
+    if (!agent) throw new ApiError(400, "INVALID_ACTOR", "Unknown agent");
     return {
-      type: "agent",
-      id: `${userId}:codex-agent`,
-      name: `Codex Agent (${username})`,
-      avatarUrl: null,
+      ...agentActor(agent, username, userId),
       username,
     };
   }
@@ -372,15 +379,22 @@ async function authenticate(request, env) {
   };
 }
 
-function resolveAssignee(target, actor) {
-  if (target === undefined || target === "current-user") return actor;
-  const userId = `basic:${encodeURIComponent(actor.username.toLowerCase())}`;
+/** Cloud actors are namespaced per Basic username, agents included. */
+function agentActor(agent, username, userId) {
   return {
     type: "agent",
-    id: `${userId}:codex-agent`,
-    name: `Codex Agent (${actor.username})`,
+    id: `${userId}:${agent.assigneeTarget}`,
+    name: `${agent.actor.name} (${username})`,
     avatarUrl: null,
   };
+}
+
+function resolveAssignee(target, actor) {
+  if (target === undefined || target === "current-user") return actor;
+  const agent = agentByAssigneeTarget(target);
+  if (!agent) return actor;
+  const userId = `basic:${encodeURIComponent(actor.username.toLowerCase())}`;
+  return agentActor(agent, actor.username, userId);
 }
 
 async function readJson(request) {

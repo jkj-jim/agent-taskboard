@@ -7,6 +7,13 @@ import { fileURLToPath } from "node:url";
 
 import { normalizeCloudUrl } from "../server/cloud-config.mjs";
 import {
+  AGENTS,
+  AGENT_KINDS,
+  DEFAULT_AGENT_KIND,
+  agentByKind,
+  isAgentKind,
+} from "../shared/agents.mjs";
+import {
   DEFAULT_PROJECT_ID,
   TASK_STATUSES,
   isTaskPriority,
@@ -190,6 +197,7 @@ async function execute(parsed, overrides) {
     baseUrl: usesCompanionControl || env.CODEX_TASKBOARD_COMPANION_URL !== undefined
       ? resolveCompanionUrl(env)
       : undefined,
+    agentKind: parsed.options.agent,
   });
   switch (command) {
     case "project list":
@@ -296,7 +304,7 @@ async function execute(parsed, overrides) {
   }
 }
 
-function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
+function createApiClient(overrides, { baseUrl: explicitBaseUrl, agentKind } = {}) {
   const fetchImplementation = overrides.fetch ?? globalThis.fetch;
   if (typeof fetchImplementation !== "function") {
     throw new TaskctlError("fetch is not available", {
@@ -307,6 +315,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
 
   const env = overrides.env ?? process.env;
   const baseUrl = normalizeBaseUrl(explicitBaseUrl ?? env.CODEX_TASKBOARD_URL ?? DEFAULT_API_URL);
+  const agentHeader = { "x-taskboard-agent": resolveAgentKind(overrides, agentKind) };
 
   return {
     async request(method, pathname, body) {
@@ -317,6 +326,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
           headers: {
             accept: "application/json",
             "x-taskboard-client": "taskctl",
+            ...agentHeader,
             ...(body === undefined ? {} : { "content-type": "application/json" }),
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -353,6 +363,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
           headers: {
             accept: "*/*",
             "x-taskboard-client": "taskctl",
+            ...agentHeader,
           },
         });
       } catch (error) {
@@ -679,15 +690,40 @@ function recurrenceFromOptions(options) {
   return { interval, unit };
 }
 
+/**
+ * Which agent is running the CLI. `--agent` wins, otherwise the first agent
+ * whose session variable is present in the environment, otherwise Codex.
+ */
+export function resolveAgentKind(overrides = {}, requested) {
+  const env = overrides.env ?? process.env;
+  if (requested !== undefined) {
+    if (!isAgentKind(requested)) {
+      throw usageError(`--agent must be one of ${AGENT_KINDS.join(", ")}`);
+    }
+    return requested;
+  }
+  const detected = AGENTS.find((agent) => {
+    const value = env[agent.sessionEnvVar];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+  return (detected ?? agentByKind(DEFAULT_AGENT_KIND)).kind;
+}
+
 function resolveThreadId(options, overrides) {
   const env = overrides.env ?? process.env;
-  const value = options["thread-id"] ?? env.CODEX_THREAD_ID;
+  const variables = AGENTS.map((agent) => agent.sessionEnvVar);
+  const value = options["thread-id"]
+    ?? variables.map((variable) => env[variable]).find((candidate) => (
+      typeof candidate === "string" && candidate.trim().length > 0
+    ));
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw usageError("Codex conversation attribution requires --thread-id or CODEX_THREAD_ID");
+    throw usageError(
+      `Conversation attribution requires --thread-id or one of ${variables.join(", ")}`,
+    );
   }
   const threadId = value.trim();
   if (threadId.length > 256) {
-    throw usageError("--thread-id and CODEX_THREAD_ID cannot exceed 256 characters");
+    throw usageError(`--thread-id and ${variables.join("/")} cannot exceed 256 characters`);
   }
   return threadId;
 }
@@ -706,6 +742,7 @@ function optionalField(name, value) {
 
 function validateOptions(options, allowedOptions) {
   for (const name of Object.keys(options)) {
+    if (name === "agent") continue;
     if (!allowedOptions.has(name)) {
       throw usageError(`Unknown option --${name}`);
     }

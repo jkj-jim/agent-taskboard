@@ -9,19 +9,22 @@ async function source(pathname) {
 }
 
 test("issue model and editor preserve a concrete assignee identity", async () => {
-  const [typesSource, appSource, editorSource] = await Promise.all([
+  const [typesSource, agentsSource, appSource, editorSource] = await Promise.all([
     source("web/src/types.ts"),
+    source("shared/agents.mjs"),
     source("web/src/App.tsx"),
     source("web/src/components/TaskEditor.tsx"),
   ]);
 
-  assert.match(typesSource, /export type AssigneeTarget = "current-user" \| "codex-agent"/);
+  assert.match(typesSource, /import type \{ AgentKind, AssigneeTarget \} from "..\/..\/shared\/agents.mjs"/);
+  assert.match(agentsSource, /assigneeTarget: "codex-agent"/);
+  assert.match(agentsSource, /assigneeTarget: "claude-agent"/);
   assert.match(typesSource, /assignee: ActorIdentity/);
   assert.match(typesSource, /export interface TaskDraft \{[\s\S]*?assigneeTarget\?: AssigneeTarget/);
   assert.match(appSource, /assigneeTarget/);
   assert.match(editorSource, /currentUser: ActorIdentity/);
   assert.match(editorSource, /aria-label="负责人"/);
-  assert.match(editorSource, /CODEX_AGENT_ACTOR/);
+  assert.match(editorSource, /AGENT_ACTORS/);
 });
 
 test("issue detail and cards expose the same assignee identity", async () => {
@@ -35,7 +38,7 @@ test("issue detail and cards expose the same assignee identity", async () => {
   assert.match(detailSource, /detail-property-label">负责人/);
   assert.match(detailSource, /saveTask\(\{ assigneeTarget:/);
   assert.match(cardSource, /card-assignee-avatar/);
-  assert.match(avatarSource, /codex-agent-logo\.png/);
+  assert.match(avatarSource, /agentAvatarSrc\(actor\)/);
   assert.match(avatarSource, /actor-avatar-\$\{actor\.type\}/);
   assert.match(styles, /\.card-assignee-avatar/);
 });

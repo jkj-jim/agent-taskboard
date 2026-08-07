@@ -1,10 +1,14 @@
 # Codex Taskboard
 
-一个本地优先的议题看板，可在浏览器中运行，也可以通过独立 CDP 启动器或注入脚本嵌入 Codex。React UI 与捆绑的 Codex Skill 所使用的 `taskctl` CLI 共用同一套 HTTP API。
+一个本地优先的议题看板，可在浏览器中运行，也可以通过独立 CDP 启动器或注入脚本嵌入 Codex。React UI 与捆绑的 Skill 所使用的 `taskctl` CLI 共用同一套 HTTP API。
+
+看板同时支持 **Codex** 和 **Claude Code** 两个 Agent：议题的负责人可以选 Codex Agent 或 Claude Agent，选谁就由谁承接后续开发。两者的差异集中在 [`shared/agents.mjs`](shared/agents.mjs)（唯一事实源）与 [`server/agents/`](server/agents/)（每个 Agent 一个适配器）两处，其余代码一律查表，不判断 Agent 名字。
 
 ## 环境要求
 
 - Node.js 22.5 或更高版本
+- 使用 Codex Agent 时：`codex` CLI
+- 使用 Claude Agent 时：`claude` CLI（Claude Code）
 
 ## 本地运行
 
@@ -44,16 +48,61 @@ npm run taskctl -- issue create \
 
 如果希望直接在 shell 路径中使用 `taskctl`，请执行 `npm link`。通过 `CODEX_TASKBOARD_URL` 可让 CLI 指向其他本地或局域网服务。云部署通过回环地址上的配套服务和 `taskctl cloud login` 进行配置。
 
-## 安装 Codex Skill
+## 安装 Skill
 
-将 `skills/manage-taskboard` 复制或软链接到 Codex 的 skills 目录，然后新建一个 Codex 任务：
+`skills/manage-taskboard` 是一份两端共用的 Skill，把它软链到各自的 skills 目录即可：
 
 ```bash
 ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
   ~/.codex/skills/manage-taskboard
+
+ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
+  ~/.claude/skills/manage-taskboard
 ```
 
-该 Skill 会指导 Codex 检查议题、将其移至 `in_progress`、使用乐观版本控制、验证工作，然后移至 `in_review`；只有在用户明确确认验收或要求标记完成后，才会将议题移至 `done`。
+该 Skill 会指导 Agent 检查议题、将其移至 `in_progress`、使用乐观版本控制、验证工作，然后移至 `in_review`；只有在用户明确确认验收或要求标记完成后，才会将议题移至 `done`。Skill 内的 `agents/openai.yaml` 只对 Codex 生效，Claude Code 会忽略它、只读 `SKILL.md` 的 frontmatter。
+
+## 配合 Claude Code 使用
+
+### 一次性准备
+
+1. **单独登录 CLI。** Claude 桌面端和 `claude` CLI 是两套登录态，桌面端已登录**不代表** CLI 可用。看板调用的是 CLI：
+
+   ```bash
+   claude auth login
+   claude auth status   # loggedIn 必须为 true
+   ```
+
+   看板会在 `GET /api/local/agents` 里如实上报每个 Agent 的可用性与登录状态，未登录时界面会提示，而不是等到发消息才失败。
+
+2. **确认项目能解析到本机目录。** 工作区解析与 Agent 无关，按顺序取三个来源：Codex 应用维护的本机项目路径表、项目自身的 `workspacePath`、以及 `taskctl project map` 写下的设备映射。多数项目会自动命中；若报 `PROJECT_WORKSPACE_UNAVAILABLE`，显式映射一次即可：
+
+   ```bash
+   npm run taskctl -- project map <project-id> --workspace-path /absolute/path/to/repo
+   ```
+
+3. **按上一节把 Skill 软链到 `~/.claude/skills/`。**
+
+`taskctl` 不需要 `npm link`：服务会在 `.data/bin/` 下生成一个 shim 并拼进 Agent 子进程的 `PATH`，同时注入 `CODEX_TASKBOARD_URL` 指向自己，Agent 直接 `taskctl issue get ABC-1 --json` 即可。
+
+### 三种用法
+
+**指派给 Claude Agent。** 在议题的「负责人」里选 `Claude Agent`。点「在对话中打开」会按负责人决定唤起哪个客户端：Codex Agent 走 `codex://`，Claude Agent 走 `claude://code/new`，并把工作目录和预填指令一起带过去。
+
+**在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此议题一开始就能关联和跳转。
+
+**关联并唤起已有会话。** 议题详情下方列出该议题每个 Agent 的当前会话，点击即可在对应客户端中打开（Claude 走 `claude://resume?session=<id>`，会把该 CLI 会话导入桌面端）。旁边的「关联已有会话…」下拉列出该项目目录下的所有 Claude Code 会话（活跃的带 ●），可以把你自己开的会话挂到议题上。
+
+会话归属是自动的：Agent 通过 `taskctl` 写议题或评论时，`taskctl` 读取 `CODEX_THREAD_ID` 或 `CLAUDE_CODE_SESSION_ID` 判断自己是谁，看板据此为每个议题保留**每个 Agent 各一条**当前会话。
+
+### 注意事项
+
+- **Claude Code 没有 OS 级沙箱。** Codex 的 `workspace-write` 由操作系统限制写入范围，Claude Code 没有等价机制；无头模式下若只放行编辑（`acceptEdits`），所有命令都会被拒绝而让 Agent 空转。因此看板把 `workspace-write` 和 `danger-full-access` 都映射为 `bypassPermissions`，**该档位等同全放行、命令不会逐条审批**，界面上有对应提示。需要逐条审批时应使用 `read-only`（对应 plan 模式），或等待后续接入审批直通。
+- **模型目录是写死的。** Claude 没有 `codex debug models` 的等价接口，可选模型维护在 `server/agents/claude.mjs` 的 `CLAUDE_MODELS` 里，新模型发布后需要手动补一行。
+- **深链需要 Claude 桌面端。** `claude://resume` / `claude://code/new` 由桌面端注册处理；首次在一个新目录里打开会话时，Claude Code 会弹出「是否信任该文件夹」，确认一次即可。
+- **桌面端打开 CLI 会话是「导入副本」，不是接管。** 终端里的 `claude` 和桌面端各自维护会话列表：桌面端起的会话直接写进 `~/.claude/projects/`，CLI 能看到；反过来 CLI 会话要点一次「在 Claude Code 中打开」，桌面端才会把它导入自己的列表（同一会话只导入一次，重复点击会回到同一个窗口）。**若该会话此刻正开在某个终端里**（选项里标了「运行中」），导入后两边会各写各的，看起来就像多了一个内容相同的会话；这类会话建议在原终端里继续，或等它结束再从看板打开。
+- **定时自动任务和配额感知只有 Codex 有。** 这两项依赖 Codex 的原生接口，Claude 侧没有等价能力。
+- **不要在 Claude Code 会话内启动看板服务。** 子进程会继承宿主的 `CLAUDE_CODE_*` 环境变量，容易出现认证异常；请在普通终端里 `npm start`。
 
 ## 嵌入 Codex
 
@@ -109,7 +158,13 @@ npm run codex:inject -- --port 9229 --open
 | `CODEX_TASKBOARD_HOST` | `0.0.0.0` | HTTP 绑定地址；使用 `127.0.0.1` 可禁用局域网访问 |
 | `CODEX_TASKBOARD_PORT` | `47823` | 本地 HTTP 端口 |
 | `CODEX_TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
-| `CODEX_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API 源地址 |
+| `CODEX_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API 源地址；服务会自动注入给它启动的 Agent |
+| `CODEX_EXECUTABLE` | `codex` | Codex CLI 可执行文件 |
+| `CODEX_HOME` | `~/.codex` | Codex 状态目录 |
+| `CLAUDE_EXECUTABLE` | `claude` | Claude Code CLI 可执行文件 |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 状态目录（Skill、会话记录） |
+
+`taskctl` 通过 `CODEX_THREAD_ID` 或 `CLAUDE_CODE_SESSION_ID` 判断自己运行在哪个 Agent 里；两者都没有时用 `--thread-id` 指定会话，用 `--agent codex|claude` 覆盖自动判断。
 
 `npm start` 会输出本地 URL 和可用的局域网 URL。同一可信网络中的协作者可以打开其中一个局域网 URL，共用同一个 Taskboard 服务。任务、评论和附件变更会通过服务器发送事件广播到所有已打开的客户端；客户端重连时会执行完整刷新，因此不会遗漏断开期间发生的变更。协作者可以设置 `CODEX_TASKBOARD_URL=http://<host-ip>:47823`，让 `taskctl` 指向共享服务。
 

@@ -3,13 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { ApiError } from "./database.mjs";
-import { discoverAiCatalog, resolveAiWorkspace } from "./ai-chat-catalog.mjs";
-import {
-  buildCodexArgs,
-  buildCodexPrompt,
-  normalizeCodexEvent,
-  spawnCodexTurn,
-} from "./ai-chat-process.mjs";
+import { DEFAULT_AGENT_KIND, spawnAgentTurn } from "./agents/index.mjs";
+import { ensureTaskctlBin, withTaskctlOnPath } from "./agents/taskctl-bin.mjs";
 
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const ERROR_CONTENT_LIMIT = 65_536;
@@ -47,10 +42,16 @@ function wait(milliseconds) {
 export class AiChatService {
   constructor(options) {
     this.database = options.database;
-    this.codexExecutable = options.codexExecutable;
-    this.codexStatePath = options.codexStatePath;
+    this.agents = options.agents;
     this.manageTaskboardSkillPath = options.manageTaskboardSkillPath;
-    this.processEnv = options.processEnv ?? process.env;
+    // Agents reach the board through `taskctl`, so hand them this server's own
+    // origin instead of letting the CLI fall back to its compiled-in default.
+    this.processEnv = options.taskboardUrl
+      ? { ...(options.processEnv ?? process.env), CODEX_TASKBOARD_URL: options.taskboardUrl }
+      : options.processEnv ?? process.env;
+    this.taskctlBinDirectory = options.taskctlBinDirectory ?? null;
+    this.taskctlCliPath = options.taskctlCliPath ?? null;
+    this.taskctlBinReady = null;
     this.killGraceMs = options.killGraceMs ?? 1_000;
     this.active = new Map();
     this.listeners = new Map();
@@ -103,20 +104,26 @@ export class AiChatService {
     };
   }
 
-  async getCatalog(projectId) {
-    return discoverAiCatalog({
-      codexExecutable: this.codexExecutable,
-      codexStatePath: this.codexStatePath,
-      database: this.database,
-      projectId,
-      processEnv: this.processEnv,
+  async getCatalog(projectId, agentKind = DEFAULT_AGENT_KIND) {
+    return this.agents.get(agentKind).catalog(projectId);
+  }
+
+  /** The environment an agent turn runs in, with `taskctl` on its PATH. */
+  async #turnEnv() {
+    if (!this.taskctlBinDirectory || !this.taskctlCliPath) return this.processEnv;
+    this.taskctlBinReady ??= ensureTaskctlBin({
+      binDirectory: this.taskctlBinDirectory,
+      cliPath: this.taskctlCliPath,
     });
+    return withTaskctlOnPath(this.processEnv, await this.taskctlBinReady);
   }
 
   async createThread(input) {
+    const agentKind = input.agentKind ?? DEFAULT_AGENT_KIND;
+    const agent = this.agents.get(agentKind);
     const [catalog, resolved] = await Promise.all([
-      this.getCatalog(input.projectId),
-      resolveAiWorkspace(input.projectId, this.codexStatePath, this.database),
+      this.getCatalog(input.projectId, agent.id),
+      agent.resolveWorkspace(input.projectId),
     ]);
     const model = this.#resolveModel(catalog, input.model);
     const reasoningEffort = input.reasoningEffort ?? model.defaultReasoningEffort;
@@ -144,6 +151,12 @@ export class AiChatService {
         workspacePath: resolved.workspacePath,
         ...(issue ? { issueId: issue.id, issueIdentifier: issue.identifier } : {}),
       },
+      agentKind: agent.id,
+      // Claude Code accepts a caller-supplied `--session-id`, so the board can
+      // link and deep-link the session before its first turn ever runs.
+      ...(agent.preassignsSessionId
+        ? { agentSessionId: agent.createSessionId() }
+        : {}),
       model: model.slug,
       reasoningEffort,
       sandbox,
@@ -159,7 +172,7 @@ export class AiChatService {
 
     if (Object.hasOwn(changes, "sandbox")) this.#validateSandbox(changes.sandbox);
     if (Object.hasOwn(changes, "model") || Object.hasOwn(changes, "reasoningEffort")) {
-      const catalog = await this.getCatalog(thread.origin.projectId);
+      const catalog = await this.getCatalog(thread.origin.projectId, thread.agentKind);
       thread = this.getThread(threadId);
       const model = this.#resolveModel(catalog, changes.model ?? thread.model);
       const reasoningEffort = changes.reasoningEffort ?? thread.reasoningEffort;
@@ -206,9 +219,10 @@ export class AiChatService {
       );
     }
 
+    const agent = this.agents.get(thread.agentKind);
     const [catalog, resolved] = await Promise.all([
-      this.getCatalog(thread.origin.projectId),
-      resolveAiWorkspace(thread.origin.projectId, this.codexStatePath, this.database),
+      this.getCatalog(thread.origin.projectId, agent.id),
+      agent.resolveWorkspace(thread.origin.projectId),
     ]);
 
     thread = this.getThread(threadId);
@@ -256,16 +270,22 @@ export class AiChatService {
       imagePaths,
     } = await this.#writeTurnAttachments(attachments);
     try {
-      const args = buildCodexArgs(thread, resolved.addDirectories, imagePaths);
-      const prompt = buildCodexPrompt(
+      const resumingThreadId = thread.agentSessionId;
+      const sessionId = resumingThreadId
+        ?? (agent.preassignsSessionId ? agent.createSessionId() : null);
+      // A pre-assigned id exists before its first turn does, so ask the agent
+      // whether the session is actually resumable instead of assuming it is.
+      const resuming = sessionId ? await agent.sessionExists(sessionId) : false;
+      const { args, cwd, prompt } = agent.buildTurn({
         thread,
-        {
-          message: input.message,
-          skills: selectedSkills,
-          attachmentPaths,
-        },
-        this.manageTaskboardSkillPath,
-      );
+        addDirectories: resolved.addDirectories,
+        imagePaths,
+        attachmentPaths,
+        message: input.message,
+        skills: selectedSkills,
+        sessionId,
+        resuming,
+      });
       const run = this.database.createAiChatRun({ threadId });
       this.#emit(threadId, { type: "ai.run", run });
       const userEventData = {};
@@ -287,44 +307,48 @@ export class AiChatService {
       });
       this.#emit(threadId, { type: "ai.event", event: userEvent });
 
-      const resumingThreadId = thread.codexThreadId;
       let startedThreadId = null;
       let terminalOutcome = null;
       let terminalError = "";
-      const { child, completion } = spawnCodexTurn({
-        executable: this.codexExecutable,
+      const decode = agent.createDecoder();
+      const { child, completion } = spawnAgentTurn({
+        executable: agent.executable,
         args,
+        cwd,
         prompt,
-        env: this.processEnv,
+        env: await this.#turnEnv(),
+        label: agent.label,
         onRawEvent: (raw) => {
-          const normalized = normalizeCodexEvent(raw);
-          if (!normalized) return;
-          if (normalized.kind === "thread.started") {
-            if (
-              (resumingThreadId && normalized.threadId !== resumingThreadId)
-              || (startedThreadId && normalized.threadId !== startedThreadId)
-            ) {
-              throw new Error("Codex returned an unexpected thread id");
+          for (const normalized of decode(raw)) {
+            if (normalized.kind === "thread.started") {
+              if (
+                (resumingThreadId && normalized.threadId !== resumingThreadId)
+                || (startedThreadId && normalized.threadId !== startedThreadId)
+              ) {
+                throw new Error(`${agent.label} returned an unexpected thread id`);
+              }
+              startedThreadId = normalized.threadId;
+              this.database.updateAiChatThread(threadId, {
+                agentSessionId: normalized.threadId,
+              });
+              continue;
             }
-            startedThreadId = normalized.threadId;
-            this.database.updateAiChatThread(threadId, { codexThreadId: normalized.threadId });
-            return;
+            const event = this.database.insertAiChatEvent({
+              threadId,
+              runId: run.id,
+              type: normalized.type,
+              role: normalized.role,
+              content: normalized.content,
+              data: normalized.data,
+            });
+            if (normalized.terminal === "completed" && terminalOutcome === null) {
+              terminalOutcome = "completed";
+            } else if (normalized.terminal === "failed") {
+              terminalOutcome = "failed";
+              terminalError ||= normalized.content;
+            }
+            this.#emit(threadId, { type: "ai.event", event });
           }
-          const event = this.database.insertAiChatEvent({
-            threadId,
-            runId: run.id,
-            type: normalized.type,
-            role: normalized.role,
-            content: normalized.content,
-            data: normalized.data,
-          });
-          if (raw.type === "turn.completed" && terminalOutcome === null) {
-            terminalOutcome = "completed";
-          } else if (raw.type === "turn.failed" || raw.type === "error") {
-            terminalOutcome = "failed";
-            terminalError ||= normalized.content;
-          }
-          this.#emit(threadId, { type: "ai.event", event });
         },
       });
 
@@ -335,6 +359,7 @@ export class AiChatService {
           run,
           active,
           result,
+          label: agent.label,
           resumingThreadId,
           startedThreadId: () => startedThreadId,
           terminalOutcome: () => terminalOutcome,
@@ -344,6 +369,7 @@ export class AiChatService {
           run,
           active,
           error,
+          label: agent.label,
           resumingThreadId,
           startedThreadId: () => startedThreadId,
           terminalOutcome: () => terminalOutcome,
@@ -420,7 +446,7 @@ export class AiChatService {
         400,
         "INVALID_MODEL",
         requestedModel === undefined
-          ? "Codex did not provide an available model"
+          ? "The agent did not provide an available model"
           : `Unknown model '${requestedModel}'`,
       );
     }
@@ -515,6 +541,7 @@ export class AiChatService {
     active,
     result,
     error,
+    label = "Codex",
     resumingThreadId,
     startedThreadId,
     terminalOutcome,
@@ -527,21 +554,21 @@ export class AiChatService {
       publicError = "Interrupted";
     } else if (error) {
       status = "failed";
-      publicError = cappedError(error) || "Codex turn failed";
+      publicError = cappedError(error) || `${label} turn failed`;
     } else if (terminalOutcome() === "failed") {
       status = "failed";
-      publicError = terminalError() || "Codex reported a failed turn";
+      publicError = terminalError() || `${label} reported a failed turn`;
     } else if (result.exitCode !== 0) {
       status = "failed";
       publicError = result.exitCode === null
-        ? `Codex exited due to signal ${result.signal ?? "unknown"}`
-        : `Codex exited with code ${result.exitCode}`;
+        ? `${label} exited due to signal ${result.signal ?? "unknown"}`
+        : `${label} exited with code ${result.exitCode}`;
     } else if (terminalOutcome() !== "completed") {
       status = "failed";
-      publicError = "Codex exited without reporting turn completion";
+      publicError = `${label} exited without reporting turn completion`;
     } else if (!resumingThreadId && !startedThreadId()) {
       status = "failed";
-      publicError = "Codex did not provide a thread id";
+      publicError = `${label} did not provide a thread id`;
     } else {
       status = "completed";
     }

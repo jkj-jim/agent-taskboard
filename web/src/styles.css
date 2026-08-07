@@ -3474,6 +3474,9 @@ kbd {
 .actor-avatar-agent-image {
   border-radius: 0;
   object-fit: contain;
+  /* Brand marks ship at different intrinsic sizes; normalise them here. */
+  width: 100%;
+  height: 100%;
 }
 
 .actor-avatar.card-assignee-avatar {

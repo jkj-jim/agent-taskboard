@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { TaskboardDatabase } from "../server/database.mjs";
 import { AiChatService } from "../server/ai-chat.mjs";
+import { createAgentRegistry } from "../server/agents/index.mjs";
 import { normalizeCodexEvent } from "../server/ai-chat-process.mjs";
 
 async function waitFor(predicate, timeout = 4_000) {
@@ -140,8 +141,19 @@ if (args[0] === "app-server") {
   database.createProject({ id: "other", name: "Other", workspacePath: null });
   const service = new AiChatService({
     database,
-    codexExecutable: executable,
-    codexStatePath,
+    agents: createAgentRegistry({
+      codex: {
+        executable,
+        statePath: codexStatePath,
+        skillPath: "/fixture/manage-taskboard/SKILL.md",
+        database,
+      },
+      claude: {
+        claudeHome: path.join(directory, "claude-home"),
+        database,
+        deviceWorkspaces: async () => new Map(),
+      },
+    }),
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
     processEnv: {
       ...process.env,
@@ -389,8 +401,19 @@ test("startup marks abandoned runs interrupted while preserving the Codex thread
   fixture.database = new TaskboardDatabase(fixture.databasePath);
   const restarted = new AiChatService({
     database: fixture.database,
-    codexExecutable: path.join(fixture.directory, "fake-codex.mjs"),
-    codexStatePath: path.join(fixture.directory, "codex-state.json"),
+    agents: createAgentRegistry({
+      codex: {
+        executable: path.join(fixture.directory, "fake-codex.mjs"),
+        statePath: path.join(fixture.directory, "codex-state.json"),
+        skillPath: "/fixture/manage-taskboard/SKILL.md",
+        database: fixture.database,
+      },
+      claude: {
+        claudeHome: path.join(fixture.directory, "claude-home"),
+        database: fixture.database,
+        deviceWorkspaces: async () => new Map(),
+      },
+    }),
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
   });
   fixture.service = restarted;

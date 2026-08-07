@@ -27,7 +27,7 @@ taskctl cloud logout [--json]
 
 `cloud login` reads the shared password from a private `Shared key:` prompt. The actor name is the display attribution sent through Basic Authentication. The companion stores its configuration with mode `0600`; project mappings stay on the current device and can differ between collaborators. In cloud mode, failed upstream writes fail rather than falling back to or double-writing the local SQLite database.
 
-Every issue or comment write must be attributed to a Codex conversation. In Codex, `taskctl` reads the current conversation from `CODEX_THREAD_ID`. Outside Codex, pass `--thread-id ID` explicitly. An explicit option takes precedence over the environment. Read commands do not require a conversation id.
+Every issue or comment write must be attributed to an agent conversation. `taskctl` reads `CODEX_THREAD_ID` inside Codex and `CLAUDE_CODE_SESSION_ID` inside Claude Code. Outside both, pass `--thread-id ID` explicitly. Use `--agent codex|claude` only to override the agent detected from the environment. An explicit option takes precedence over the environment. Read commands do not require a conversation id.
 
 Every successful command writes one JSON object with `schemaVersion` to stdout. The current schema version is `2`. Errors write one JSON object to stderr. Exit codes are `0` for success, `2` for invalid input, `3` when the service is unavailable, `4` for API or response errors, and `5` for conflicts.
 
@@ -59,7 +59,7 @@ taskctl issue create \
 
 Statuses are `backlog`, `todo`, `in_progress`, `in_review`, `blocked`, `done`, and `canceled`. Priorities are `none`, `urgent`, `high`, `medium`, and `low`.
 
-Issues created through `taskctl` are assigned to Codex Agent by default. Other CLI writes preserve the existing assignee.
+Issues created through `taskctl` are assigned to the running agent (Codex Agent or Claude Agent) by default. Other CLI writes preserve the existing assignee.
 
 ## Update issues
 
@@ -86,13 +86,13 @@ taskctl issue archive ID [--thread-id ID] [--if-version N] [--json]
 taskctl issue restore ID [--thread-id ID] [--if-version N] [--json]
 ```
 
-Use `issue move` to set `in_progress` before implementation and `in_review` after implementation and self-verification. Codex must not move work directly from `in_progress` to `done`; use `done` only after the user explicitly confirms acceptance or explicitly asks to mark the issue complete. Use `blocked` when work cannot continue and `canceled` when it will not continue. On a version conflict, fetch the issue again and reconcile before retrying.
+Use `issue move` to set `in_progress` before implementation and `in_review` after implementation and self-verification. The agent must not move work directly from `in_progress` to `done`; use `done` only after the user explicitly confirms acceptance or explicitly asks to mark the issue complete. Use `blocked` when work cannot continue and `canceled` when it will not continue. On a version conflict, fetch the issue again and reconcile before retrying.
 
-Use either `--git-branch` or `--worktree-path`/`--worktree-branch`; an issue has only one development context. Issue JSON stores it as `developmentContext`, either `{ "type": "branch", "branch": "..." }` or `{ "type": "worktree", "path": "...", "branch": "..." }`. Its singular `threadId` is the Codex conversation that most recently created or changed the issue itself. Recurrence requires a due date.
+Use either `--git-branch` or `--worktree-path`/`--worktree-branch`; an issue has only one development context. Issue JSON stores it as `developmentContext`, either `{ "type": "branch", "branch": "..." }` or `{ "type": "worktree", "path": "...", "branch": "..." }`. Its singular `threadId` is the agent conversation that most recently created or changed the issue itself. Recurrence requires a due date.
 
 ## Issue relations
 
-Read the anchor issue immediately before adding or removing a relation and use its current version. Relation writes require Codex conversation attribution like every other issue write.
+Read the anchor issue immediately before adding or removing a relation and use its current version. Relation writes require conversation attribution like every other issue write.
 
 ```bash
 taskctl issue relation add ISSUE_ID \

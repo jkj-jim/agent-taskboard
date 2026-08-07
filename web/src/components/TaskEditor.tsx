@@ -15,7 +15,7 @@ import {
   type WorkflowOption,
 } from "../types";
 import {
-  CODEX_AGENT_ACTOR,
+  AGENT_ACTORS,
   actorKey,
   assigneeTargetForActor,
 } from "../actors";
@@ -144,7 +144,7 @@ export function TaskEditor({
   }, [developmentContext, developmentScan.contexts]);
 
   const workflowAvailable = !workflowId || workflows.some((workflow) => workflow.id === workflowId);
-  const assigneeOptions = [task?.assignee, currentUser, CODEX_AGENT_ACTOR]
+  const assigneeOptions = [task?.assignee, currentUser, ...AGENT_ACTORS]
     .filter((actor): actor is ActorIdentity => actor !== undefined)
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index

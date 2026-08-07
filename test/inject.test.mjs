@@ -9,6 +9,7 @@ const sourceUrl = new URL("../inject/codex-taskboard.user.js", import.meta.url);
 const source = await readFile(sourceUrl, "utf8");
 const webStyles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const webApp = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+const webAgents = await readFile(new URL("../web/src/agents.ts", import.meta.url), "utf8");
 
 test("injection is an idempotent IIFE guarded by its current source hash", () => {
   assert.match(source, /^\(\(\) => \{/);
@@ -240,7 +241,7 @@ test("issues open an unsent native Codex composer in the exact workspace with a 
   );
   assert.match(
     webApp,
-    /const prompt = `\[\$manage-taskboard\]\(\$\{manageTaskboardSkillPath\}\) \$\{instruction\}`/,
+    /\? `\[\$manage-taskboard\]\(\$\{manageTaskboardSkillPath\}\) \$\{instruction\}`/,
   );
   assert.match(webApp, /skillName: "manage-taskboard"/);
   assert.match(webApp, /skillDisplayName: "Manage Taskboard"/);
@@ -251,7 +252,8 @@ test("issues open an unsent native Codex composer in the exact workspace with a 
 });
 
 test("the standalone web page opens linked Codex tasks through the app deep link", () => {
-  assert.match(webApp, /window\.location\.assign\(`codex:\/\/threads\/\$\{encodeURIComponent\(threadId\.trim\(\)\)\}`\)/);
+  assert.match(webAgents, /return `codex:\/\/threads\/\$\{encodeURIComponent\(id\)\}`/);
+  assert.match(webApp, /window\.location\.assign\(link\)/);
 });
 
 test("the injected app opens an existing local Codex task instead of a new composer", () => {
@@ -273,10 +275,11 @@ test("host navigation follows Codex's renderer message bus", () => {
 });
 
 test("the standalone web page opens unlinked issues as prefilled empty Codex tasks", () => {
-  assert.match(webApp, /const query = new URLSearchParams\(\)/);
-  assert.match(webApp, /query\.set\("path", workspacePath\)/);
-  assert.match(webApp, /query\.set\("prompt", prompt\)/);
-  assert.match(webApp, /window\.location\.assign\(`codex:\/\/new\?/);
+  assert.match(webAgents, /const query = new URLSearchParams\(\)/);
+  assert.match(webAgents, /query\.set\("path", workspacePath\)/);
+  assert.match(webAgents, /query\.set\("prompt", prompt\)/);
+  assert.match(webAgents, /return `codex:\/\/new\?\${query/);
+  assert.match(webApp, /agentNewSessionLink\(agentKind, \{ prompt, workspacePath \}\)/);
 });
 
 test("host context captures all Codex projects even when the sidebar section is collapsed", () => {

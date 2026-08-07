@@ -16,7 +16,17 @@ import {
   isTaskStatus,
 } from "../shared/domain.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
+import {
+  ASSIGNEE_TARGETS,
+  DEFAULT_AGENT_KIND,
+  agentByActorId,
+  agentByAssigneeTarget,
+  agentByKind,
+  isAssigneeTarget,
+} from "../shared/agents.mjs";
 import { AiChatService } from "./ai-chat.mjs";
+import { createAgentRegistry } from "./agents/index.mjs";
+import { createDeviceWorkspaces } from "./agents/workspaces.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
 import {
   CloudProxyError,
@@ -43,12 +53,6 @@ const INLINE_ATTACHMENT_TYPES = new Set([
 ]);
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const TRUSTED_EMBED_ORIGINS = new Set(["app://-"]);
-const CODEX_AGENT_ACTOR = {
-  type: "agent",
-  id: "codex-agent",
-  name: "Codex Agent",
-  avatarUrl: null,
-};
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
@@ -496,7 +500,13 @@ function requestHeader(request, name) {
 
 function actorFromRequest(request) {
   if (request.headers["x-taskboard-client"] === "taskctl") {
-    return CODEX_AGENT_ACTOR;
+    // Older CLIs send no agent header; they were always Codex.
+    const agentKind = requestHeader(request, "x-taskboard-agent") ?? DEFAULT_AGENT_KIND;
+    const agent = agentByKind(agentKind);
+    if (!agent) {
+      throw new ApiError(400, "INVALID_ACTOR", `Unknown agent '${agentKind}'`);
+    }
+    return agent.actor;
   }
 
   const rawId = requestHeader(request, "x-taskboard-user-id");
@@ -538,17 +548,38 @@ function actorFromRequest(request) {
   return { type: "user", id, name, avatarUrl };
 }
 
+/**
+ * Ties the conversation a write came from to the agent that ran it, so an
+ * issue can keep one reachable session per agent.
+ */
+/** Adds the per-agent sessions only when an issue actually has some. */
+function withAgentSessions(database, task) {
+  const agentSessions = database.listAgentSessions(task.id);
+  return agentSessions.length > 0 ? { ...task, agentSessions } : task;
+}
+
+function rememberAgentSession(database, request, taskId, sessionId) {
+  if (!taskId || !sessionId) return;
+  const agent = agentByActorId(actorFromRequest(request).id);
+  if (agent) database.recordAgentSession(taskId, agent.kind, sessionId);
+}
+
 function parseAssigneeTarget(value) {
   if (value === undefined) return undefined;
-  if (value !== "current-user" && value !== "codex-agent") {
-    throw new ApiError(400, "INVALID_FIELD", "'assigneeTarget' must be current-user or codex-agent");
+  if (!isAssigneeTarget(value)) {
+    throw new ApiError(
+      400,
+      "INVALID_FIELD",
+      `'assigneeTarget' must be one of ${ASSIGNEE_TARGETS.join(", ")}`,
+    );
   }
   return value;
 }
 
 function resolveAssignee(target, actor) {
   if (target === undefined) return actor;
-  if (target === "codex-agent") return CODEX_AGENT_ACTOR;
+  const agent = agentByAssigneeTarget(target);
+  if (agent) return agent.actor;
   if (actor.type !== "user") {
     throw new ApiError(400, "INVALID_FIELD", "'current-user' requires a user request identity");
   }
@@ -796,6 +827,7 @@ function parseAiThreadCreate(body) {
     "projectId",
     "issueId",
     "title",
+    "agentKind",
     "model",
     "reasoningEffort",
     "sandbox",
@@ -804,6 +836,7 @@ function parseAiThreadCreate(body) {
     projectId: validateProjectId(body.projectId),
     issueId: parseAiSetting(body.issueId, "issueId", 128),
     title: parseAiSetting(body.title, "title", 160),
+    agentKind: parseAiSetting(body.agentKind, "agentKind", 32),
     model: parseAiSetting(body.model, "model", 128),
     reasoningEffort: parseAiSetting(body.reasoningEffort, "reasoningEffort", 64),
     sandbox: parseAiSandbox(body.sandbox),
@@ -1286,6 +1319,10 @@ export function resolveServerOptions(options = {}) {
       ?? path.join(codexHome, ".codex-global-state.json"),
     codexProcessesPath: options.codexProcessesPath
       ?? path.join(codexHome, "process_manager", "chat_processes.json"),
+    claudeExecutable: options.claudeExecutable ?? process.env.CLAUDE_EXECUTABLE ?? "claude",
+    claudeHome: options.claudeHome
+      ?? process.env.CLAUDE_CONFIG_DIR
+      ?? path.join(os.homedir(), ".claude"),
   };
 }
 
@@ -1326,11 +1363,31 @@ export function createTaskboardServer(options = {}) {
       )) ?? null;
     },
   });
+  const agents = createAgentRegistry({
+    codex: {
+      executable: resolved.codexExecutable,
+      statePath: resolved.codexStatePath,
+      skillPath: resolved.skillPath,
+      database,
+    },
+    claude: {
+      executable: resolved.claudeExecutable,
+      claudeHome: resolved.claudeHome,
+      database,
+      deviceWorkspaces: createDeviceWorkspaces({
+        codexStatePath: resolved.codexStatePath,
+        database,
+        readProjectMappings: async () => (await cloudConfig.read()).projectMappings,
+      }),
+    },
+  });
   const aiChat = new AiChatService({
     database,
-    codexExecutable: resolved.codexExecutable,
-    codexStatePath: resolved.codexStatePath,
+    agents,
     manageTaskboardSkillPath: resolved.skillPath,
+    taskboardUrl: `http://127.0.0.1:${resolvePort()}`,
+    taskctlBinDirectory: path.join(resolved.dataDirectory, "bin"),
+    taskctlCliPath: path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
   });
   const aiEventResponses = new Set();
 
@@ -1445,11 +1502,31 @@ export function createTaskboardServer(options = {}) {
         });
       }
 
+      if (pathname === "/api/local/agents") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertNoQuery(url.searchParams, "/api/local/agents");
+        return sendJson(response, 200, {
+          defaultAgentKind: DEFAULT_AGENT_KIND,
+          agents: await Promise.all(agents.list().map(async (agent) => ({
+            id: agent.id,
+            label: agent.label,
+            actor: agent.actor,
+            assigneeTarget: agent.assigneeTarget,
+            ...(await agent.status()),
+          }))),
+        });
+      }
+
       if (pathname === "/api/local/ai/catalog") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-        assertAllowedQuery(url.searchParams, new Set(["projectId"]), "GET /api/local/ai/catalog");
+        assertAllowedQuery(
+          url.searchParams,
+          new Set(["projectId", "agentKind"]),
+          "GET /api/local/ai/catalog",
+        );
         const projectId = validateProjectId(url.searchParams.get("projectId") ?? undefined);
-        return sendJson(response, 200, await aiChat.getCatalog(projectId));
+        const agentKind = url.searchParams.get("agentKind") ?? DEFAULT_AGENT_KIND;
+        return sendJson(response, 200, await aiChat.getCatalog(projectId, agentKind));
       }
 
       if (pathname === "/api/local/ai/threads") {
@@ -1689,6 +1766,7 @@ export function createTaskboardServer(options = {}) {
             actor,
             assignee: resolveAssignee(assigneeTarget, actor),
           });
+          rememberAgentSession(database, request, task.id, input.threadId);
           events.emit("task.created", { task });
           return sendJson(response, 201, { task });
         }
@@ -1780,6 +1858,7 @@ export function createTaskboardServer(options = {}) {
             actor: actorFromRequest(request),
           });
           const task = database.getTask(taskId);
+          rememberAgentSession(database, request, task?.id, comment.threadId);
           events.emit("comment.created", { comment, task });
           return sendJson(response, 201, { comment });
         }
@@ -1984,7 +2063,7 @@ export function createTaskboardServer(options = {}) {
           }
           const task = database.getTask(id);
           if (!task) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
-          return sendJson(response, 200, { task });
+          return sendJson(response, 200, { task: withAgentSessions(database, task) });
         }
         if (!action && request.method === "PATCH") {
           const { version, changes, threadId, assigneeTarget } = parseTaskPatch(await readJson(request));
@@ -1992,12 +2071,14 @@ export function createTaskboardServer(options = {}) {
             changes.assignee = resolveAssignee(assigneeTarget, actorFromRequest(request));
           }
           const task = database.updateTask(id, version, changes, threadId);
+          rememberAgentSession(database, request, task.id, threadId);
           events.emit("task.updated", { task });
           return sendJson(response, 200, { task });
         }
         if (action === "move" && request.method === "POST") {
           const move = parseMove(await readJson(request));
           const task = database.moveTask(id, move.version, move.status, move.sortOrder, move.threadId);
+          rememberAgentSession(database, request, task.id, move.threadId);
           events.emit("task.moved", { task });
           return sendJson(response, 200, { task });
         }

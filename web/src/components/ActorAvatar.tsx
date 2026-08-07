@@ -1,3 +1,4 @@
+import { agentAvatarSrc } from "../agents";
 import type { ActorIdentity } from "../types";
 
 export function ActorAvatar({
@@ -16,7 +17,7 @@ export function ActorAvatar({
       {actor.type === "agent" ? (
         <img
           className="actor-avatar-image actor-avatar-agent-image"
-          src="/codex-agent-logo.png"
+          src={agentAvatarSrc(actor)}
           alt=""
         />
       ) : actor.avatarUrl ? (

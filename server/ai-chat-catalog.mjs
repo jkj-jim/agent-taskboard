@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 const CATALOG_TIMEOUT_MS = 10_000;
 const CATALOG_MAX_BUFFER = 2 * 1024 * 1024;
 
-async function existingDirectory(value) {
+export async function existingDirectory(value) {
   if (typeof value !== "string" || !path.isAbsolute(value.trim())) return null;
   try {
     const resolved = await realpath(value.trim());

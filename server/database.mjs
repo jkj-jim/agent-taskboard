@@ -148,6 +148,10 @@ function aiChatThreadFromRow(row) {
       ...(row.origin_issue_id ? { issueId: row.origin_issue_id } : {}),
       ...(row.origin_issue_identifier ? { issueIdentifier: row.origin_issue_identifier } : {}),
     },
+    agentKind: row.agent_kind ?? "codex",
+    // `codex_thread_id` predates multi-agent support and now holds the session
+    // id of whichever agent owns the thread. Both names read the same column.
+    agentSessionId: row.codex_thread_id,
     codexThreadId: row.codex_thread_id,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
@@ -279,6 +283,7 @@ export class TaskboardDatabase {
         origin_workspace_path TEXT NOT NULL,
         origin_issue_id TEXT,
         origin_issue_identifier TEXT,
+        agent_kind TEXT NOT NULL DEFAULT 'codex',
         codex_thread_id TEXT,
         model TEXT NOT NULL,
         reasoning_effort TEXT NOT NULL,
@@ -409,6 +414,29 @@ export class TaskboardDatabase {
       CREATE INDEX IF NOT EXISTS tasks_project_status_sort
         ON tasks(project_id, archived_at, status, sort_order, created_at)
     `);
+
+    // One current session per agent per issue, so a Codex thread and a Claude
+    // Code session can both stay reachable from the same issue.
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS task_agent_sessions (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        agent_kind TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, agent_kind)
+      )
+    `);
+    this.database.exec(`
+      INSERT OR IGNORE INTO task_agent_sessions (task_id, agent_kind, session_id, updated_at)
+      SELECT id, 'codex', thread_id, updated_at FROM tasks WHERE thread_id IS NOT NULL
+    `);
+
+    const aiThreadColumns = this.database.prepare("PRAGMA table_info(ai_chat_threads)").all();
+    if (!aiThreadColumns.some((column) => column.name === "agent_kind")) {
+      this.database.exec(
+        "ALTER TABLE ai_chat_threads ADD COLUMN agent_kind TEXT NOT NULL DEFAULT 'codex'",
+      );
+    }
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS task_relations (
         relation_type TEXT NOT NULL CHECK (relation_type IN ('parent', 'blocks', 'related')),
@@ -697,9 +725,9 @@ export class TaskboardDatabase {
         id, title, status,
         origin_project_id, origin_project_name, origin_workspace_path,
         origin_issue_id, origin_issue_identifier,
-        codex_thread_id, model, reasoning_effort, sandbox,
+        agent_kind, codex_thread_id, model, reasoning_effort, sandbox,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       input.title,
@@ -709,7 +737,8 @@ export class TaskboardDatabase {
       input.origin.workspacePath,
       input.origin.issueId ?? null,
       input.origin.issueIdentifier ?? null,
-      input.codexThreadId ?? null,
+      input.agentKind ?? "codex",
+      input.agentSessionId ?? input.codexThreadId ?? null,
       input.model,
       input.reasoningEffort,
       input.sandbox,
@@ -727,6 +756,7 @@ export class TaskboardDatabase {
     const columns = {
       title: "title",
       status: "status",
+      agentSessionId: "codex_thread_id",
       codexThreadId: "codex_thread_id",
       model: "model",
       reasoningEffort: "reasoning_effort",
@@ -734,8 +764,10 @@ export class TaskboardDatabase {
     };
     const assignments = [];
     const values = [];
+    const assigned = new Set();
     for (const [key, column] of Object.entries(columns)) {
-      if (!Object.hasOwn(changes, key)) continue;
+      if (!Object.hasOwn(changes, key) || assigned.has(column)) continue;
+      assigned.add(column);
       assignments.push(`${column} = ?`);
       values.push(changes[key]);
     }
@@ -945,7 +977,28 @@ export class TaskboardDatabase {
         created_at,
         id
     `;
-    return this.database.prepare(sql).all(...values).map((row) => this.#taskWithRelations(row));
+    const tasks = this.database.prepare(sql).all(...values)
+      .map((row) => this.#taskWithRelations(row));
+    // One extra query for the whole page instead of one per task: the board
+    // needs the agent behind each session to label and route its links.
+    const sessions = new Map();
+    for (const row of this.database.prepare(`
+      SELECT task_id, agent_kind, session_id, updated_at
+      FROM task_agent_sessions
+      ORDER BY updated_at DESC
+    `).all()) {
+      const list = sessions.get(row.task_id) ?? [];
+      list.push({
+        agentKind: row.agent_kind,
+        sessionId: row.session_id,
+        updatedAt: row.updated_at,
+      });
+      sessions.set(row.task_id, list);
+    }
+    return tasks.map((task) => {
+      const agentSessions = sessions.get(task.id);
+      return agentSessions ? { ...task, agentSessions } : task;
+    });
   }
 
   getTask(id) {
@@ -1515,6 +1568,30 @@ export class TaskboardDatabase {
     if (cycle) {
       throw new ApiError(409, "RELATION_CYCLE", "This parent would create a cycle");
     }
+  }
+
+  /** Remembers the session an agent most recently used on an issue. */
+  recordAgentSession(taskId, agentKind, sessionId) {
+    if (!taskId || !agentKind || !sessionId) return;
+    this.database.prepare(`
+      INSERT INTO task_agent_sessions (task_id, agent_kind, session_id, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT (task_id, agent_kind)
+      DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
+    `).run(taskId, agentKind, sessionId, now());
+  }
+
+  listAgentSessions(taskId) {
+    return this.database.prepare(`
+      SELECT agent_kind, session_id, updated_at
+      FROM task_agent_sessions
+      WHERE task_id = ?
+      ORDER BY updated_at DESC
+    `).all(taskId).map((row) => ({
+      agentKind: row.agent_kind,
+      sessionId: row.session_id,
+      updatedAt: row.updated_at,
+    }));
   }
 
   #touchTask(id, version, threadId) {

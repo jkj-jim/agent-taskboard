@@ -42,6 +42,12 @@ import {
   actorForAssigneeTarget,
   assigneeTargetForActor,
 } from "./actors";
+import {
+  agentByActorId,
+  agentLabel,
+  agentNewSessionLink,
+  agentSessionLink,
+} from "./agents";
 import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
 import { AiChat } from "./components/AiChat";
 import { BoardSettingsMenu } from "./components/BoardSettingsMenu";
@@ -69,6 +75,7 @@ import {
 import {
   TASK_STATUSES,
   type ActorIdentity,
+  type AgentKind,
   type DevelopmentScan,
   type HostContext,
   type IssueRelationType,
@@ -1673,13 +1680,18 @@ export function App() {
     }
   }
 
-  function openThread(threadId: string) {
-    if (embedded && window.parent !== window) {
+  function openThread(agentKind: AgentKind, threadId: string) {
+    // The Codex host owns its own routing when the board is embedded in it.
+    if (agentKind === "codex" && embedded && window.parent !== window) {
       window.parent.postMessage({ type: "taskboard:open-thread", payload: { threadId } }, "*");
       return;
     }
-
-    window.location.assign(`codex://threads/${encodeURIComponent(threadId.trim())}`);
+    const link = agentSessionLink(agentKind, threadId);
+    if (!link) {
+      setActionError(`无法打开 ${agentLabel(agentKind)} 会话。`);
+      return;
+    }
+    window.location.assign(link);
   }
 
   function expandCodexSidebar() {
@@ -1700,13 +1712,19 @@ export function App() {
       ?? developmentScan.workspacePath
       ?? hostContext?.workspacePath;
     const instruction = `e-taskboard Addressing the issues mentioned in ${task.identifier}`;
-    const prompt = `[$manage-taskboard](${manageTaskboardSkillPath}) ${instruction}`;
+    // The assignee decides which client picks the work up.
+    const agentKind = agentByActorId(task.assignee.id)?.kind ?? "codex";
+    const prompt = agentKind === "codex"
+      ? `[$manage-taskboard](${manageTaskboardSkillPath}) ${instruction}`
+      : `Use the manage-taskboard skill to address the issues mentioned in ${task.identifier}.`;
 
-    if (!embedded || window.parent === window) {
-      const query = new URLSearchParams();
-      if (workspacePath) query.set("path", workspacePath);
-      query.set("prompt", prompt);
-      window.location.assign(`codex://new?${query.toString().replace(/\+/g, "%20")}`);
+    if (agentKind !== "codex" || !embedded || window.parent === window) {
+      const link = agentNewSessionLink(agentKind, { prompt, workspacePath });
+      if (!link) {
+        setActionError(`无法在 ${agentLabel(agentKind)} 中开始这个议题。`);
+        return;
+      }
+      window.location.assign(link);
       return;
     }
     if (openingThreadTaskId) return;

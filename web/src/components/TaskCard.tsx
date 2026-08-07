@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
-import { TASK_STATUSES, type Task, type TaskPriority, type TaskStatus } from "../types";
+import { TASK_STATUSES, type AgentKind, type Task, type TaskPriority, type TaskStatus } from "../types";
+import { agentByActorId } from "../agents";
 import { ActorAvatar } from "./ActorAvatar";
 import { LinearIcon, LinearPriorityIcon } from "./LinearIcon";
 
@@ -24,7 +25,7 @@ interface TaskCardProps {
   onMove: (task: Task, status: TaskStatus) => void;
   onDragStart: (task: Task, height: number) => void;
   onDragEnd: () => void;
-  onOpenThread: (threadId: string) => void;
+  onOpenThread: (agentKind: AgentKind, threadId: string) => void;
 }
 
 export function TaskCard({
@@ -158,7 +159,7 @@ export function TaskCard({
             type="button"
             aria-label={`查看对话 ${task.threadId}`}
             title={`查看对话 ${task.threadId}`}
-            onClick={stopThen(() => onOpenThread(task.threadId!))}
+            onClick={stopThen(() => onOpenThread(agentByActorId(task.assignee.id)?.kind ?? "codex", task.threadId!))}
           >
             <LinearIcon name="conversation" />
           </button>

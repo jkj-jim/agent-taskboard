@@ -16,6 +16,8 @@ import {
 import { TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
+  AgentKind,
+  AgentSession,
   Attachment,
   Comment,
   DevelopmentContext,
@@ -29,8 +31,9 @@ import type {
   TaskStatus,
   WorkflowOption,
 } from "../types";
+import { agentByActorId, agentLabel } from "../agents";
 import {
-  CODEX_AGENT_ACTOR,
+  AGENT_ACTORS,
   actorKey,
   assigneeTargetForActor,
 } from "../actors";
@@ -90,7 +93,7 @@ interface TaskDetailProps {
     type: IssueRelationType,
     relatedTaskId: string,
   ) => Promise<RelationMutationResult>;
-  onOpenThread: (threadId: string) => void;
+  onOpenThread: (agentKind: AgentKind, threadId: string) => void;
   onOpenInThread: (task: Task) => void;
   openingThread: boolean;
   onError: (message: string | null) => void;
@@ -161,21 +164,24 @@ function DescriptionDocument({ value }: { value: string }) {
 }
 
 function ConversationLink({
+  agentKind,
   threadId,
   onOpen,
 }: {
+  agentKind: AgentKind;
   threadId: string;
-  onOpen: (threadId: string) => void;
+  onOpen: (agentKind: AgentKind, threadId: string) => void;
 }) {
+  const label = `在 ${agentLabel(agentKind)} 中打开`;
   return (
     <button
       className="issue-conversation-link"
       type="button"
-      title={`查看对话 ${threadId}`}
-      onClick={() => onOpen(threadId)}
+      title={`${label} ${threadId}`}
+      onClick={() => onOpen(agentKind, threadId)}
     >
       <LinearIcon name="conversation" />
-      <strong>查看对话</strong>
+      <strong>{label}</strong>
       <span className="conversation-divider" aria-hidden="true" />
       <span className="conversation-thread-id">{threadId}</span>
     </button>
@@ -562,13 +568,20 @@ export function TaskDetail({
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
-  const assigneeOptions = [currentTask.assignee, currentUser, CODEX_AGENT_ACTOR]
+  const assigneeOptions = [currentTask.assignee, currentUser, ...AGENT_ACTORS]
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
     ));
   const visibleTaskAttachments = attachments.filter(
     (attachment) => !description.includes(attachmentContentUrl(attachment)),
   );
+  // Cloud rows carry only `threadId`, which predates multi-agent support and is
+  // therefore always a Codex thread.
+  const issueSessions: AgentSession[] = currentTask.agentSessions?.length
+    ? currentTask.agentSessions
+    : currentTask.threadId
+      ? [{ agentKind: "codex", sessionId: currentTask.threadId, updatedAt: currentTask.updatedAt }]
+      : [];
 
   return (
     <section className="issue-detail" aria-label={`${task.identifier} 议题详情`}>
@@ -643,9 +656,16 @@ export function TaskDetail({
                     {description ? <DescriptionDocument value={description} /> : "添加描述…"}
                   </div>
                 )}
-                {currentTask.threadId && (
+                {issueSessions.length > 0 && (
                   <div className="issue-conversation-list" aria-label="处理此议题的对话">
-                    <ConversationLink threadId={currentTask.threadId} onOpen={onOpenThread} />
+                    {issueSessions.map((session) => (
+                      <ConversationLink
+                        key={`${session.agentKind}:${session.sessionId}`}
+                        agentKind={session.agentKind}
+                        threadId={session.sessionId}
+                        onOpen={onOpenThread}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
@@ -883,7 +903,11 @@ export function TaskDetail({
                       )}
                       {comment.threadId && (
                         <div className="comment-conversation-link">
-                          <ConversationLink threadId={comment.threadId} onOpen={onOpenThread} />
+                          <ConversationLink
+                            agentKind={agentByActorId(comment.authorId)?.kind ?? "codex"}
+                            threadId={comment.threadId}
+                            onOpen={onOpenThread}
+                          />
                         </div>
                       )}
                     </div>

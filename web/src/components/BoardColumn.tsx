@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DragEvent } from "react";
-import type { Task, TaskStatus } from "../types";
+import type { AgentKind, Task, TaskStatus } from "../types";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 import { LinearIcon, LinearStatusIcon } from "./LinearIcon";
 import { TaskCard } from "./TaskCard";
@@ -40,7 +40,7 @@ interface BoardColumnProps {
   onDragEnd: () => void;
   onDragEnter: (status: TaskStatus) => void;
   onDrop: (status: TaskStatus, taskId: string, beforeTaskId: string | null) => void;
-  onOpenThread: (threadId: string) => void;
+  onOpenThread: (agentKind: AgentKind, threadId: string) => void;
   onHide: (status: TaskStatus) => void;
 }
 
