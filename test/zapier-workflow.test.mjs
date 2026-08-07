@@ -15,7 +15,6 @@ test("workflow editing is a constrained vertical execution sequence instead of a
   assert.match(board, /normalizeWorkflowSnapshot/);
   assert.match(board, /deriveWorkflowLayout/);
   assert.match(board, /insertWorkflowNode/);
-  assert.match(board, /moveWorkflowNode/);
   assert.match(board, /edgeTypes=\{EDGE_TYPES\}/);
   assert.match(board, /nodeOrigin=\{TOP_CENTER_ORIGIN\}/);
   assert.match(board, /nodesConnectable=\{false\}/);
@@ -206,18 +205,21 @@ test("condition branch pickers use recursive sequence refs and allow nested cond
   assert.doesNotMatch(board, /item\.data\.kind !== "condition"/);
 });
 
-test("deleting a condition removes its subtree, while conditions move as one subtree and cannot duplicate", () => {
+test("deleting a condition removes its subtree, and conditions cannot be duplicated", () => {
   assert.match(
     board,
     /deleteWorkflowNode\(flow, nodeId\)[\s\S]*?deleted\.removedNodeIds/,
   );
+  // A condition owns a subtree, so copying it is refused outright.
   assert.match(
     board,
-    /source\.data\.kind === "condition"\) return/,
+    /const duplicateNode = [\s\S]*?source\.data\.kind === "condition"\) return/,
   );
+  // Dragging is confined to plan children: a node without a parent — a
+  // top-level step or a condition — never starts a drag session.
   assert.match(
     board,
-    /moveWorkflowNode\([\s\S]*?session\.sequenceRef/,
+    /const onNodeDragStart = [\s\S]{0,80}?if \(!node\.parentId\) return;/,
   );
 });
 

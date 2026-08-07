@@ -8,6 +8,7 @@ import { TaskboardDatabase } from "../server/database.mjs";
 import { AiChatService } from "../server/ai-chat.mjs";
 import { createAgentRegistry } from "../server/agents/index.mjs";
 import { normalizeCodexEvent } from "../server/ai-chat-process.mjs";
+import { SKILL_MARKER } from "../server/agents/prompt.mjs";
 
 async function waitFor(predicate, timeout = 4_000) {
   const deadline = Date.now() + timeout;
@@ -191,7 +192,10 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       supportedReasoningEfforts: ["low", "medium", "high"],
       serviceTiers: [{ id: "priority", name: "Fast" }],
     }]);
-    assert.deepEqual(catalog.skills, [{ id: "real-skill", label: "Real Skill", scope: "repo" }]);
+    // The catalog normalizes a missing description/path to "" rather than omitting them.
+    assert.deepEqual(catalog.skills, [
+      { id: "real-skill", label: "Real Skill", description: "", path: "", scope: "repo" },
+    ]);
 
     const thread = await fixture.service.createThread({
       projectId: "project",
@@ -202,7 +206,9 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
     assert.equal(thread.origin.workspacePath, fixture.workspace);
 
     const first = await fixture.service.startTurn(thread.id, {
-      message: "HIDDEN_SENTINEL first",
+      // A skill renders where its marker sits in the message; without one the
+      // reference has nowhere to go.
+      message: `HIDDEN_SENTINEL first ${SKILL_MARKER}`,
       skillIds: ["real-skill"],
     });
     await waitFor(() => fixture.service.getRun(first.id)?.status !== "running");
@@ -214,6 +220,8 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       "exec", "--json", "--color", "never",
       "-C", fixture.workspace,
       "-s", "workspace-write",
+      "-c", 'approval_policy="on-request"',
+      "-c", 'approvals_reviewer="auto_review"',
       "--add-dir", fixture.otherWorkspace,
       "-m", "gpt-real",
       "-c", 'model_reasoning_effort="high"',
@@ -227,6 +235,8 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       "exec", "--json", "--color", "never",
       "-C", fixture.workspace,
       "-s", "workspace-write",
+      "-c", 'approval_policy="on-request"',
+      "-c", 'approvals_reviewer="auto_review"',
       "--add-dir", fixture.otherWorkspace,
       "-m", "gpt-real",
       "-c", 'model_reasoning_effort="high"',

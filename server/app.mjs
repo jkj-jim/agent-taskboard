@@ -564,6 +564,18 @@ function rememberAgentSession(database, request, taskId, sessionId) {
   if (agent) database.recordAgentSession(taskId, agent.kind, sessionId);
 }
 
+/**
+ * `tasks.thread_id` predates multi-agent support and every reader — the Codex
+ * host bridge and the cloud board, which has no per-agent sessions table —
+ * treats it as a Codex thread. So only Codex may stamp it; every other agent is
+ * reachable through `task_agent_sessions` instead.
+ */
+function codexOnlyThreadId(request, threadId) {
+  if (threadId === undefined) return undefined;
+  const agent = agentByActorId(actorFromRequest(request).id);
+  return !agent || agent.kind === "codex" ? threadId : undefined;
+}
+
 function parseAssigneeTarget(value) {
   if (value === undefined) return undefined;
   if (!isAssigneeTarget(value)) {
@@ -1763,6 +1775,7 @@ export function createTaskboardServer(options = {}) {
           const { assigneeTarget, ...input } = parseTaskCreate(await readJson(request));
           const task = database.createTask({
             ...input,
+            threadId: codexOnlyThreadId(request, input.threadId),
             actor,
             assignee: resolveAssignee(assigneeTarget, actor),
           });
@@ -2070,27 +2083,33 @@ export function createTaskboardServer(options = {}) {
           if (assigneeTarget !== undefined) {
             changes.assignee = resolveAssignee(assigneeTarget, actorFromRequest(request));
           }
-          const task = database.updateTask(id, version, changes, threadId);
+          const task = database.updateTask(id, version, changes, codexOnlyThreadId(request, threadId));
           rememberAgentSession(database, request, task.id, threadId);
           events.emit("task.updated", { task });
           return sendJson(response, 200, { task });
         }
         if (action === "move" && request.method === "POST") {
           const move = parseMove(await readJson(request));
-          const task = database.moveTask(id, move.version, move.status, move.sortOrder, move.threadId);
+          const task = database.moveTask(
+            id,
+            move.version,
+            move.status,
+            move.sortOrder,
+            codexOnlyThreadId(request, move.threadId),
+          );
           rememberAgentSession(database, request, task.id, move.threadId);
           events.emit("task.moved", { task });
           return sendJson(response, 200, { task });
         }
         if (action === "archive" && request.method === "POST") {
           const { version, threadId } = parseArchive(await readJson(request));
-          const task = database.archiveTask(id, version, threadId);
+          const task = database.archiveTask(id, version, codexOnlyThreadId(request, threadId));
           events.emit("task.archived", { task });
           return sendJson(response, 200, { task });
         }
         if (action === "restore" && request.method === "POST") {
           const { version, threadId } = parseArchive(await readJson(request));
-          const task = database.restoreTask(id, version, threadId);
+          const task = database.restoreTask(id, version, codexOnlyThreadId(request, threadId));
           events.emit("task.restored", { task });
           return sendJson(response, 200, { task });
         }
@@ -2151,6 +2170,7 @@ export function createTaskboardServer(options = {}) {
       return server.address();
     },
     async close() {
+      // `server.close()` first, so the port stops accepting before AI shutdown.
       const serverClosed = listening
         ? new Promise((resolve, reject) => {
             server.close((error) => error ? reject(error) : resolve());
@@ -2160,6 +2180,10 @@ export function createTaskboardServer(options = {}) {
       for (const response of aiEventResponses) response.end();
       aiEventResponses.clear();
       await aiChat.close();
+      // Event streams and idle keep-alive sockets never end on their own, so
+      // `server.close()` alone waits forever and keeps the port bound — which
+      // makes the next `node --watch` restart fail to bind.
+      if (listening) server.closeAllConnections();
       await serverClosed;
       listening = false;
       database.close();

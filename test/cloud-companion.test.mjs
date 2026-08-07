@@ -519,6 +519,7 @@ test("configured server proxies business APIs without touching local rows and ad
       mode: "cloud",
       realtime: { transport: "poll", intervalMs: 2000 },
       localCapabilities: { available: true },
+      capabilities: { localAiChat: true },
       manageTaskboardSkillPath: app.options.skillPath,
     });
     const session = await fetch(`${baseUrl}/api/local/cloud-session`)

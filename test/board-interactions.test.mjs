@@ -172,7 +172,10 @@ test("comments stage, upload, render and delete their own attachments", () => {
   assert.match(apiSource, /\/api\/comments\/\$\{encodeURIComponent\(commentId\)\}\/attachments/);
   assert.match(detailSource, /pendingCommentFiles/);
   assert.match(detailSource, /uploadCommentAttachment\(comment\.id, file\)/);
-  assert.match(detailSource, /comment\.attachments\.map/);
+  // Attachments already inlined in the body are filtered out before rendering,
+  // so assert the rendered list rather than a bare `.map`.
+  assert.match(detailSource, /className="comment-attachment-list"/);
+  assert.match(detailSource, /comment\.attachments[\s\S]{0,240}?\.map\(/);
   assert.match(detailSource, /setPendingAttachmentDelete\(attachment\)/);
 });
 

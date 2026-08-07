@@ -18,6 +18,12 @@ test("issue title and description keep Linear-style inline editing when focused"
 });
 
 test("editing and composing comments do not add focus chrome", () => {
-  assert.equal([...detailSource.matchAll(/className="comment-input"/g)].length, 2);
+  // The two paths no longer share a class: editing is a plain textarea, and
+  // composing is a rich contenteditable. Assert the invariant itself — neither
+  // grows a ring or border on focus — instead of counting a shared class name.
+  assert.match(detailSource, /className="comment-input"/);
+  assert.match(detailSource, /className="comment-inline-media"/);
   assert.doesNotMatch(styles, /\.comment-composer:focus-within\s*\{/);
+  assert.doesNotMatch(styles, /\.comment-input:focus/);
+  assert.doesNotMatch(styles, /\.comment-inline-media:focus/);
 });

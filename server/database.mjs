@@ -417,6 +417,9 @@ export class TaskboardDatabase {
 
     // One current session per agent per issue, so a Codex thread and a Claude
     // Code session can both stay reachable from the same issue.
+    const hadAgentSessions = this.database.prepare(`
+      SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'task_agent_sessions'
+    `).get();
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS task_agent_sessions (
         task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -426,9 +429,40 @@ export class TaskboardDatabase {
         PRIMARY KEY (task_id, agent_kind)
       )
     `);
+    // Only seed on first creation. `tasks.thread_id` predates multi-agent
+    // support, so re-running this on every boot stamped a phantom Codex row
+    // onto every issue a Claude session had touched.
+    if (!hadAgentSessions) {
+      this.database.exec(`
+        INSERT OR IGNORE INTO task_agent_sessions (task_id, agent_kind, session_id, updated_at)
+        SELECT id, 'codex', thread_id, updated_at FROM tasks WHERE thread_id IS NOT NULL
+      `);
+    }
+    // A session id belongs to exactly one agent, so a Codex row duplicating
+    // another agent's session is one of those phantoms. Clear them out.
     this.database.exec(`
-      INSERT OR IGNORE INTO task_agent_sessions (task_id, agent_kind, session_id, updated_at)
-      SELECT id, 'codex', thread_id, updated_at FROM tasks WHERE thread_id IS NOT NULL
+      DELETE FROM task_agent_sessions
+      WHERE agent_kind = 'codex'
+        AND EXISTS (
+          SELECT 1 FROM task_agent_sessions AS owner
+          WHERE owner.task_id = task_agent_sessions.task_id
+            AND owner.agent_kind <> 'codex'
+            AND owner.session_id = task_agent_sessions.session_id
+        )
+    `);
+    // Earlier builds let any agent stamp `tasks.thread_id`, which readers treat
+    // as a Codex thread. Where the stored value is provably another agent's
+    // session, clear it rather than leave a `codex://` link that resolves to
+    // nothing. Values that cannot be attributed are left alone.
+    this.database.exec(`
+      UPDATE tasks SET thread_id = NULL
+      WHERE thread_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM task_agent_sessions
+          WHERE task_agent_sessions.task_id = tasks.id
+            AND task_agent_sessions.agent_kind <> 'codex'
+            AND task_agent_sessions.session_id = tasks.thread_id
+        )
     `);
 
     const aiThreadColumns = this.database.prepare("PRAGMA table_info(ai_chat_threads)").all();
@@ -488,10 +522,13 @@ export class TaskboardDatabase {
           FROM task_threads
           WHERE task_threads.task_id = tasks.id
           ORDER BY
+            -- Correlate to task_threads, not tasks: SQLite cannot resolve the
+            -- UPDATE target from two subquery levels deep, and the outer WHERE
+            -- already pins task_threads.task_id to tasks.id.
             CASE WHEN EXISTS (
               SELECT 1
               FROM comments
-              WHERE comments.task_id = tasks.id
+              WHERE comments.task_id = task_threads.task_id
                 AND comments.thread_id = task_threads.thread_id
             ) THEN 1 ELSE 0 END,
             task_threads.created_at DESC,
