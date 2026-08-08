@@ -37,21 +37,54 @@ if (args[0] === "debug") {
 }
 `);
   await chmod(codexExecutable, 0o755);
+  const claudeExecutable = path.join(directory, "fake-claude.mjs");
+  await writeFile(claudeExecutable, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  process.stdout.write('{"loggedIn":true}');
+} else {
+  const sessionFlag = args.indexOf("--session-id");
+  const resumeFlag = args.indexOf("--resume");
+  const sessionId = sessionFlag >= 0 ? args[sessionFlag + 1] : args[resumeFlag + 1];
+  process.stdin.resume();
+  process.stdin.on("end", () => {
+    process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:sessionId}) + "\\n");
+    process.stdout.write('{"type":"result","subtype":"success","is_error":false,"result":"ok"}\\n');
+  });
+}
+`);
+  await chmod(claudeExecutable, 0o755);
   const codexStatePath = path.join(directory, "codex-state.json");
   await writeFile(codexStatePath, JSON.stringify({
     "local-projects": { local: { rootPaths: [workspace] } },
   }));
+  const nativeLaunches = [];
+  const codexDesktopController = {
+    async inspect() {
+      return { available: true };
+    },
+    async createTask(input) {
+      nativeLaunches.push(input);
+      return {
+        sessionId: `00000000-0000-4000-8000-${String(nativeLaunches.length).padStart(12, "0")}`,
+      };
+    },
+  };
   const app = createTaskboardServer({
     dataDirectory: directory,
+    claudeExecutable,
+    claudeHome: path.join(directory, "claude-home"),
     codexExecutable,
     codexStatePath,
     skillPath: "/fixture/manage-taskboard/SKILL.md",
+    codexDesktopController,
   });
   const address = await app.listen({ host, port: 0 });
   return {
     app,
     baseUrl: `http://127.0.0.1:${address.port}`,
     directory,
+    nativeLaunches,
     workspace,
     async close() {
       await app.close();
@@ -108,6 +141,7 @@ test("loopback AI API freezes server-owned origin and rejects injected execution
   try {
     const meta = await request(fixture.baseUrl, "/api/meta");
     assert.equal(meta.body.capabilities.localAiChat, true);
+    assert.equal(meta.body.capabilities.nativeCodexTaskLaunch, true);
     const catalog = await request(fixture.baseUrl, "/api/local/ai/catalog?projectId=local");
     assert.equal(catalog.response.status, 200);
     assert.equal(catalog.body.models[0].slug, "gpt-real");
@@ -155,6 +189,302 @@ test("loopback AI API freezes server-owned origin and rejects injected execution
     }
     assert.equal(snapshot.body.thread.codexThreadId, "session-1");
     assert.equal(snapshot.body.events.some((event) => event.content === "ok"), true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a user move into in progress is launched natively exactly once without codex exec", async () => {
+  const fixture = await createServerFixture();
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Automatically start this issue",
+        status: "todo",
+        assigneeTarget: "codex-agent",
+      },
+    });
+    assert.equal(created.response.status, 201);
+
+    const moved = await request(
+      fixture.baseUrl,
+      `/api/tasks/${created.body.task.id}/move`,
+      {
+        method: "POST",
+        body: {
+          version: created.body.task.version,
+          status: "in_progress",
+          sortOrder: 1024,
+        },
+      },
+    );
+    assert.equal(moved.response.status, 200);
+    assert.equal(moved.body.agentStart, undefined);
+    assert.equal((await request(fixture.baseUrl, "/api/local/ai/threads")).body.threads.length, 0);
+
+    const launchBody = {
+      expectedVersion: moved.body.task.version,
+      trigger: "status-transition",
+      presentation: "background",
+      previousSessionId: null,
+    };
+    const launched = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      { method: "POST", body: launchBody },
+    );
+    assert.equal(launched.response.status, 200);
+    assert.equal(launched.body.status, "started");
+    assert.equal(launched.body.agentKind, "codex");
+    assert.deepEqual(launched.body.task.agentSessions, [
+      {
+        agentKind: "codex",
+        sessionId: launched.body.sessionId,
+        updatedAt: launched.body.task.agentSessions[0].updatedAt,
+      },
+    ]);
+    assert.equal(fixture.nativeLaunches.length, 1);
+    assert.equal(fixture.nativeLaunches[0].workspacePath, fixture.workspace);
+    assert.equal(
+      fixture.nativeLaunches[0].instruction,
+      `e-taskboard Addressing the issues mentioned in ${created.body.task.identifier}`,
+    );
+    assert.equal(fixture.nativeLaunches[0].presentation, "background");
+
+    const duplicate = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      { method: "POST", body: launchBody },
+    );
+    assert.equal(duplicate.response.status, 200);
+    assert.equal(duplicate.body.sessionId, launched.body.sessionId);
+    assert.equal(fixture.nativeLaunches.length, 1);
+
+    const reordered = await request(
+      fixture.baseUrl,
+      `/api/tasks/${created.body.task.id}/move`,
+      {
+        method: "POST",
+        body: {
+          version: launched.body.task.version,
+          status: "in_progress",
+          sortOrder: 2048,
+        },
+      },
+    );
+    assert.equal(reordered.response.status, 200);
+    assert.equal(reordered.body.agentStart, undefined);
+    const afterReorder = await request(fixture.baseUrl, "/api/local/ai/threads");
+    assert.equal(afterReorder.body.threads.length, 0);
+
+    const claimed = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Agent claim must not recurse",
+        status: "todo",
+        assigneeTarget: "codex-agent",
+      },
+    });
+    const agentMove = await request(
+      fixture.baseUrl,
+      `/api/tasks/${claimed.body.task.id}/move`,
+      {
+        method: "POST",
+        headers: {
+          "x-taskboard-agent": "codex",
+          "x-taskboard-client": "taskctl",
+        },
+        body: {
+          version: claimed.body.task.version,
+          status: "in_progress",
+          sortOrder: 3072,
+        },
+      },
+    );
+    assert.equal(agentMove.response.status, 200);
+    assert.equal(agentMove.body.agentStart, undefined);
+    const afterAgentClaim = await request(fixture.baseUrl, "/api/local/ai/threads");
+    assert.equal(afterAgentClaim.body.threads.length, 0);
+    assert.equal(fixture.nativeLaunches.length, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("local agent session binding uses compare-and-set and does not bump idempotent writes", async () => {
+  const fixture = await createServerFixture();
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Session compare and set",
+        status: "in_progress",
+        assigneeTarget: "codex-agent",
+      },
+    });
+    const firstSessionId = "33333333-3333-4333-8333-333333333333";
+    const secondSessionId = "44444444-4444-4444-8444-444444444444";
+    const bind = (sessionId, previousSessionId) => request(
+      fixture.baseUrl,
+      `/api/tasks/${created.body.task.id}/agent-sessions`,
+      {
+        method: "POST",
+        body: { agentKind: "codex", sessionId, previousSessionId },
+      },
+    );
+
+    const bound = await bind(firstSessionId, null);
+    assert.equal(bound.response.status, 200);
+    assert.equal(bound.body.task.threadId, firstSessionId);
+    assert.equal(bound.body.task.agentSessions[0].sessionId, firstSessionId);
+    assert.equal(bound.body.task.version, created.body.task.version + 1);
+
+    const idempotent = await bind(firstSessionId, null);
+    assert.equal(idempotent.response.status, 200);
+    assert.equal(idempotent.body.task.version, bound.body.task.version);
+
+    const conflict = await bind(secondSessionId, null);
+    assert.equal(conflict.response.status, 409);
+    assert.equal(conflict.body.error.code, "AGENT_SESSION_CONFLICT");
+    assert.equal(conflict.body.error.details.currentSessionId, firstSessionId);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("detail-style patches leave Codex for native launch while Claude keeps its adapter", async () => {
+  const fixture = await createServerFixture();
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Assign first, then start",
+        status: "todo",
+        assigneeTarget: "current-user",
+      },
+    });
+    const assigned = await request(fixture.baseUrl, `/api/tasks/${created.body.task.id}`, {
+      method: "PATCH",
+      body: {
+        version: created.body.task.version,
+        assigneeTarget: "codex-agent",
+      },
+    });
+    assert.equal(assigned.response.status, 200);
+    assert.equal(assigned.body.agentStart, undefined);
+
+    const started = await request(fixture.baseUrl, `/api/tasks/${created.body.task.id}`, {
+      method: "PATCH",
+      body: {
+        version: assigned.body.task.version,
+        status: "in_progress",
+      },
+    });
+    assert.equal(started.response.status, 200);
+    assert.equal(started.body.agentStart, undefined);
+    const native = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      {
+        method: "POST",
+        body: {
+          expectedVersion: started.body.task.version,
+          trigger: "status-transition",
+          presentation: "background",
+          previousSessionId: null,
+        },
+      },
+    );
+    assert.equal(native.response.status, 200);
+    assert.equal(fixture.nativeLaunches.length, 1);
+
+    const alreadyActive = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Start first, then assign",
+        status: "in_progress",
+        assigneeTarget: "current-user",
+      },
+    });
+    const assignedWhileActive = await request(
+      fixture.baseUrl,
+      `/api/tasks/${alreadyActive.body.task.id}`,
+      {
+        method: "PATCH",
+        body: {
+          version: alreadyActive.body.task.version,
+          assigneeTarget: "claude-agent",
+        },
+      },
+    );
+    assert.equal(assignedWhileActive.response.status, 200);
+    assert.equal(assignedWhileActive.body.agentStart.status, "started");
+    assert.equal(assignedWhileActive.body.agentStart.agentKind, "claude");
+
+    const edited = await request(
+      fixture.baseUrl,
+      `/api/tasks/${alreadyActive.body.task.id}`,
+      {
+        method: "PATCH",
+        body: {
+          version: assignedWhileActive.body.task.version,
+          title: "An ordinary edit must not restart the agent",
+        },
+      },
+    );
+    assert.equal(edited.response.status, 200);
+    assert.equal(edited.body.agentStart, undefined);
+    const threads = await request(fixture.baseUrl, "/api/local/ai/threads");
+    assert.equal(threads.body.threads.length, 1);
+    assert.equal(threads.body.threads[0].agentKind, "claude");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the same in-progress transition starts the Claude assignee through its adapter", async () => {
+  const fixture = await createServerFixture();
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Automatically start Claude",
+        status: "todo",
+        assigneeTarget: "claude-agent",
+      },
+    });
+    const moved = await request(
+      fixture.baseUrl,
+      `/api/tasks/${created.body.task.id}/move`,
+      {
+        method: "POST",
+        body: {
+          version: created.body.task.version,
+          status: "in_progress",
+          sortOrder: 1024,
+        },
+      },
+    );
+    assert.equal(moved.response.status, 200);
+    assert.equal(moved.body.agentStart.status, "started");
+    assert.equal(moved.body.agentStart.agentKind, "claude");
+
+    let task;
+    for (let index = 0; index < 100; index += 1) {
+      task = await request(fixture.baseUrl, `/api/tasks/${created.body.task.id}`);
+      if (task.body.task.agentSessions?.[0]?.agentKind === "claude") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(task.body.task.agentSessions.length, 1);
+    assert.equal(task.body.task.agentSessions[0].agentKind, "claude");
+    assert.match(task.body.task.agentSessions[0].sessionId, /^[0-9a-f-]{36}$/i);
   } finally {
     await fixture.close();
   }
@@ -251,6 +581,7 @@ test("local AI routes reject private-LAN clients while ordinary API routes remai
     const metadata = await requestFrom(address, port, "/api/meta");
     assert.equal(metadata.status, 200);
     assert.equal(metadata.body.capabilities.localAiChat, false);
+    assert.equal(metadata.body.capabilities.nativeCodexTaskLaunch, false);
     const ai = await requestFrom(address, port, "/api/local/ai/threads");
     assert.equal(ai.status, 403);
     assert.equal(ai.body.error.code, "LOCAL_AI_LOOPBACK_REQUIRED");

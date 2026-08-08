@@ -4196,6 +4196,36 @@ kbd {
   line-height: 16px;
 }
 
+.detail-delete-action {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 32px;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  text-align: left;
+}
+
+.detail-delete-action:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.detail-delete-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  outline-offset: 1px;
+}
+
+.detail-delete-action svg {
+  width: 15px;
+  height: 15px;
+}
+
 .delete-backdrop {
   position: fixed;
   z-index: 80;

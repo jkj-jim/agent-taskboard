@@ -23,6 +23,19 @@ export interface AgentSession {
   updatedAt: string;
 }
 
+export type AgentStartResult =
+  | {
+      status: "started";
+      agentKind: AgentKind;
+      threadId: string;
+      runId: string;
+    }
+  | {
+      status: "failed";
+      agentKind: AgentKind;
+      error: string;
+    };
+
 export interface ActorIdentity {
   type: ActorType;
   id: string;
@@ -59,6 +72,14 @@ export interface TaskboardMetadata {
 
 export interface TaskboardCapabilities {
   localAiChat: boolean;
+  nativeCodexTaskLaunch: boolean;
+}
+
+export interface NativeCodexTaskLaunchResult {
+  status: "started";
+  agentKind: "codex";
+  sessionId: string;
+  task: Task;
 }
 
 export type AiChatSandbox = "read-only" | "workspace-write" | "danger-full-access";
@@ -211,7 +232,7 @@ export interface Task {
   labels: string[];
   sortOrder: number;
   threadId: string | null;
-  /** One current session per agent. Only the single-task endpoint returns it. */
+  /** One current session per agent when the local taskboard owns the issue. */
   agentSessions?: AgentSession[];
   creatorType: ActorType;
   creatorId: string;

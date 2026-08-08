@@ -12,6 +12,12 @@ import {
   reconcileTaskboardAutomation,
 } from "../shared/taskboard-automation.mjs";
 import {
+  CdpConnection,
+  DEFAULT_CODEX_DEBUGGING_PORT,
+  codexDebuggingPorts,
+  codexTargets,
+} from "../shared/codex-cdp.mjs";
+import {
   findResidentInjectorPids,
   handleHostBindingPayload,
   reconcileInjectionRuntime,
@@ -21,7 +27,7 @@ import { readCodexQuotaStatus } from "./codex-rate-limits.mjs";
 
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
-const defaultCodexDebuggingPort = 9229;
+const defaultCodexDebuggingPort = DEFAULT_CODEX_DEBUGGING_PORT;
 const injectionPath = path.join(projectRoot, "inject", "codex-taskboard.user.js");
 const automationPoliciesPath = path.join(projectRoot, ".data", "codex-automation-policies.json");
 const taskboardOrigin = `http://127.0.0.1:${resolvePort()}`;
@@ -89,12 +95,6 @@ function parseArgs(argv) {
     throw new Error("--port must be an integer between 1 and 65535");
   }
   return options;
-}
-
-async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.json();
 }
 
 async function isReachable(url) {
@@ -203,129 +203,6 @@ function launchCodex(appPath, port) {
   );
 }
 
-class CdpConnection {
-  constructor(url) {
-    this.socket = new WebSocket(url);
-    this.sequence = 0;
-    this.pending = new Map();
-    this.eventWaiters = new Map();
-    this.eventHandlers = new Map();
-    this.closed = false;
-  }
-
-  async open() {
-    await new Promise((resolve, reject) => {
-      this.socket.addEventListener("open", resolve, { once: true });
-      this.socket.addEventListener("error", () => reject(new Error("CDP WebSocket connection failed")), {
-        once: true,
-      });
-    });
-    this.socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (!message.id) {
-        const waiters = this.eventWaiters.get(message.method) || [];
-        this.eventWaiters.delete(message.method);
-        waiters.forEach((waiter) => waiter.resolve(message.params));
-        const handlers = this.eventHandlers.get(message.method) || [];
-        handlers.forEach((handler) => {
-          try {
-            Promise.resolve(handler(message.params)).catch((error) => {
-              console.error(`CDP ${message.method} handler failed: ${error.message}`);
-            });
-          } catch (error) {
-            console.error(`CDP ${message.method} handler failed: ${error.message}`);
-          }
-        });
-        return;
-      }
-      const pending = this.pending.get(message.id);
-      if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message));
-      else pending.resolve(message.result);
-    });
-    this.socket.addEventListener("close", () => {
-      this.closed = true;
-      const error = new Error("CDP WebSocket closed");
-      this.pending.forEach((pending) => pending.reject(error));
-      this.pending.clear();
-      this.eventWaiters.forEach((waiters) => waiters.forEach((waiter) => waiter.reject(error)));
-      this.eventWaiters.clear();
-      this.eventHandlers.clear();
-    });
-  }
-
-  send(method, params = {}) {
-    const id = ++this.sequence;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  waitFor(method, timeoutMs) {
-    return new Promise((resolve, reject) => {
-      const waiters = this.eventWaiters.get(method) || [];
-      const timeout = setTimeout(() => {
-        this.eventWaiters.set(
-          method,
-          (this.eventWaiters.get(method) || []).filter((waiter) => waiter.resolve !== wrappedResolve),
-        );
-        reject(new Error(`Timed out waiting for CDP event ${method}`));
-      }, timeoutMs);
-      const wrappedResolve = (value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      };
-      waiters.push({ resolve: wrappedResolve, reject });
-      this.eventWaiters.set(method, waiters);
-    });
-  }
-
-  on(method, handler) {
-    const handlers = this.eventHandlers.get(method) || [];
-    handlers.push(handler);
-    this.eventHandlers.set(method, handlers);
-    return () => {
-      this.eventHandlers.set(
-        method,
-        (this.eventHandlers.get(method) || []).filter((candidate) => candidate !== handler),
-      );
-    };
-  }
-
-  close() {
-    this.socket.close();
-  }
-}
-
-async function codexTargets(port) {
-  const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-  return targets.filter(
-    (target) =>
-      target.type === "page" &&
-      target.webSocketDebuggerUrl &&
-      !target.url?.includes("initialRoute=%2Fglobal-dictation") &&
-      (target.url?.startsWith("app://") || target.title === "Codex"),
-  );
-}
-
-function codexDebuggingPorts(preferredPort) {
-  const ports = new Set([preferredPort]);
-  const processes = spawnSync("/bin/ps", ["-axo", "command="], {
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  if (processes.status !== 0) return [...ports];
-
-  for (const command of processes.stdout.split("\n")) {
-    if (!command.includes("/ChatGPT.app/") && !command.includes("/Codex.app/")) continue;
-    const match = command.match(/--remote-debugging-port=(\d+)/);
-    if (match) ports.add(Number(match[1]));
-  }
-  return [...ports];
-}
-
 function processCwd(pid) {
   const result = spawnSync("/usr/sbin/lsof", [
     "-a",
@@ -408,14 +285,14 @@ async function waitForResidentInjectorReady(port, pid, startupToken, expectedSou
           const readiness = await cdp.send("Runtime.evaluate", {
             expression: `({
               token: window[${JSON.stringify(hostStartupTokenName)}],
-              taskboardEntryMounted: Boolean(document.getElementById("codex-taskboard-entry")),
+              taskboardInjectionMounted: Boolean(window.__codexTaskboardInjection__),
               sourceHash: window.__codexTaskboardInjection__?.sourceHash || null
             })`,
             returnByValue: true,
           });
           if (
             readiness.result.value?.token === startupToken
-            && readiness.result.value.taskboardEntryMounted
+            && readiness.result.value.taskboardInjectionMounted
             && readiness.result.value.sourceHash === expectedSourceHash
           ) return;
         } finally {

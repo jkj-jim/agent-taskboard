@@ -1618,6 +1618,52 @@ export class TaskboardDatabase {
     `).run(taskId, agentKind, sessionId, now());
   }
 
+  bindAgentSession(taskId, agentKind, sessionId, previousSessionId) {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const task = this.#requireTask(taskId);
+      const session = this.database.prepare(`
+        SELECT session_id
+        FROM task_agent_sessions
+        WHERE task_id = ? AND agent_kind = ?
+      `).get(task.id, agentKind);
+      const currentSessionId = session?.session_id ?? (agentKind === "codex" ? task.threadId : null);
+      if (currentSessionId === sessionId) {
+        this.database.exec("COMMIT");
+        return this.getTask(task.id);
+      }
+      if (currentSessionId !== previousSessionId) {
+        throw new ApiError(
+          409,
+          "AGENT_SESSION_CONFLICT",
+          "The issue was bound to another agent session",
+          { previousSessionId, currentSessionId },
+        );
+      }
+
+      const timestamp = now();
+      this.database.prepare(`
+        INSERT INTO task_agent_sessions (task_id, agent_kind, session_id, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (task_id, agent_kind)
+        DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
+      `).run(task.id, agentKind, sessionId, timestamp);
+      const result = this.database.prepare(`
+        UPDATE tasks
+        SET thread_id = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND version = ?
+      `).run(agentKind === "codex" ? sessionId : task.threadId, timestamp, task.id, task.version);
+      if (result.changes !== 1) {
+        this.#throwMissingOrConflict(task.id, task.version);
+      }
+      this.database.exec("COMMIT");
+      return this.getTask(task.id);
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listAgentSessions(taskId) {
     return this.database.prepare(`
       SELECT agent_kind, session_id, updated_at

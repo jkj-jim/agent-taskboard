@@ -95,6 +95,7 @@ interface TaskDetailProps {
   ) => Promise<RelationMutationResult>;
   onOpenThread: (agentKind: AgentKind, threadId: string) => void;
   onOpenInThread: (task: Task) => void;
+  onArchive: (task: Task) => Promise<boolean>;
   openingThread: boolean;
   onError: (message: string | null) => void;
   onAnnounce: (message: string) => void;
@@ -204,6 +205,7 @@ export function TaskDetail({
   onRemoveRelation,
   onOpenThread,
   onOpenInThread,
+  onArchive,
   openingThread,
   onError,
   onAnnounce,
@@ -236,6 +238,8 @@ export function TaskDetail({
   const [savingCommentId, setSavingCommentId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Comment | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<InlineMediaComposerHandle>(null);
@@ -509,6 +513,13 @@ export function TaskDetail({
     } finally {
       setDeleting(false);
     }
+  }
+
+  async function confirmArchive() {
+    if (archiving) return;
+    setArchiving(true);
+    const archived = await onArchive(currentTask);
+    if (!archived) setArchiving(false);
   }
 
   async function uploadFiles(files: FileList) {
@@ -1156,6 +1167,14 @@ export function TaskDetail({
               <span>创建于 {exactTime(currentTask.createdAt)}</span>
               {currentTask.updatedAt !== currentTask.createdAt && <span>更新于 {exactTime(currentTask.updatedAt)}</span>}
             </div>
+            <button
+              className="detail-delete-action"
+              type="button"
+              onClick={() => setArchiveConfirmationOpen(true)}
+            >
+              <LinearIcon name="trash" />
+              <span>删除议题</span>
+            </button>
           </aside>
         </div>
       </div>
@@ -1185,6 +1204,21 @@ export function TaskDetail({
             <div>
               <button className="button secondary" type="button" disabled={deletingAttachment} onClick={() => setPendingAttachmentDelete(null)}>取消</button>
               <button className="button danger" type="button" disabled={deletingAttachment} onClick={() => void confirmAttachmentDelete()}>{deletingAttachment ? "删除中…" : "删除附件"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {archiveConfirmationOpen && (
+        <div className="delete-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !archiving) setArchiveConfirmationOpen(false);
+        }}>
+          <div className="delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-issue-title">
+            <h2 id="delete-issue-title">删除这个议题？</h2>
+            <p>“{currentTask.identifier} {currentTask.title}” 将从看板中移除。</p>
+            <div>
+              <button className="button secondary" type="button" disabled={archiving} onClick={() => setArchiveConfirmationOpen(false)}>取消</button>
+              <button className="button danger" type="button" disabled={archiving} onClick={() => void confirmArchive()}>{archiving ? "删除中…" : "删除议题"}</button>
             </div>
           </div>
         </div>

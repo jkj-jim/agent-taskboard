@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.6.8";
+  const VERSION = "0.7.0";
   const SOURCE_HASH = window.__CODEX_TASKBOARD_SOURCE_HASH__;
   const SENTINEL_KEY = "__codexTaskboardInjection__";
   const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47823/?host=codex";
@@ -70,6 +70,7 @@
   let mutedNativeSelections = new Map();
   let openGeneration = 0;
   let pendingThreadCreation = null;
+  let nativeTaskLaunch = null;
   let lastNativeThreadId = "";
   let active = false;
   let destroyed = false;
@@ -1109,6 +1110,61 @@
       .forEach((node) => node.removeAttribute(HOST_ATTRIBUTE));
   }
 
+  function revealNativeContentBehindTaskboard() {
+    document.querySelectorAll(`[${HIDDEN_ATTRIBUTE}="true"]`)
+      .forEach((node) => node.removeAttribute(HIDDEN_ATTRIBUTE));
+  }
+
+  function beginNativeTaskLaunch(presentation) {
+    if (presentation !== "background" && presentation !== "foreground") {
+      throw new Error("不支持的 Codex 对话展示方式");
+    }
+    if (nativeTaskLaunch) throw new Error("已有 Codex 原生任务正在创建");
+    const row = activeThreadRow();
+    const activeThreadId = normalizeThreadId(
+      row?.getAttribute("data-app-action-sidebar-thread-id"),
+    );
+    nativeTaskLaunch = {
+      presentation,
+      taskboardOpen: active && page?.hidden === false,
+      activeThreadId: activeThreadId || lastNativeThreadId || "",
+      sidebarCollapsed: nativeSidebarCollapsed(),
+    };
+    if (presentation === "foreground") {
+      closeTaskboard(false);
+    } else {
+      revealNativeContentBehindTaskboard();
+      restoreNativeSelection();
+    }
+    expandNativeSidebar();
+    return { ...nativeTaskLaunch };
+  }
+
+  function endNativeTaskLaunch(success = true) {
+    const snapshot = nativeTaskLaunch;
+    nativeTaskLaunch = null;
+    if (!snapshot) return;
+    if (snapshot.sidebarCollapsed && !nativeSidebarCollapsed()) {
+      nativeSidebarTrigger()?.click();
+    }
+    if (snapshot.presentation === "background") {
+      if (snapshot.taskboardOpen) {
+        active = true;
+        mountActivePage();
+        syncEntryState();
+        postHostContext();
+      } else {
+        restoreNativeContent();
+      }
+      return;
+    }
+    if (!success && snapshot.taskboardOpen) openTaskboard();
+  }
+
+  function prefillNativeTask(payload) {
+    return requestHostTaskComposerPrefill(payload);
+  }
+
   function mountActivePage() {
     if (!active) return;
     if (!page) page = createPage();
@@ -1121,6 +1177,12 @@
       surface.appendChild(page);
     }
     surface.setAttribute(HOST_ATTRIBUTE, "true");
+    if (nativeTaskLaunch?.presentation === "background") {
+      revealNativeContentBehindTaskboard();
+      page.hidden = false;
+      document.documentElement.setAttribute("data-codex-taskboard-open", "true");
+      return;
+    }
     Array.from(surface.children).forEach((child) => {
       if (child !== page && child.getAttribute(OWNED_ATTRIBUTE) !== "true") {
         child.setAttribute(HIDDEN_ATTRIBUTE, "true");
@@ -1251,6 +1313,7 @@
   }
 
   function onNativeRouteChange() {
+    if (nativeTaskLaunch?.presentation === "background") return;
     if (active) closeTaskboard(false);
   }
 
@@ -1261,6 +1324,9 @@
     reloadFrame,
     open: openTaskboard,
     close: closeTaskboard,
+    beginNativeTaskLaunch,
+    endNativeTaskLaunch,
+    prefillNativeTask,
     destroy,
     hostResponse: onHostResponse,
   };

@@ -21,7 +21,14 @@ afterEach(async () => {
 async function startServer(configure, listenOptions = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "codex-taskboard-test-"));
   const options = configure ? await configure(directory) : {};
-  const app = createTaskboardServer({ dataDirectory: directory, ...options });
+  const app = createTaskboardServer({
+    dataDirectory: directory,
+    codexDesktopController: {
+      async inspect() { return { available: false }; },
+      async createTask() { throw new Error("Codex desktop is unavailable in this fixture"); },
+    },
+    ...options,
+  });
   const address = await app.listen({ port: 0, ...listenOptions });
   runningApps.push({ app, directory });
   return `http://127.0.0.1:${address.port}`;
@@ -77,7 +84,7 @@ test("health and the default local project are available", async () => {
   assert.equal(metadata.response.status, 200);
   assert.deepEqual(metadata.body, {
     manageTaskboardSkillPath: skillPath,
-    capabilities: { localAiChat: true },
+    capabilities: { localAiChat: true, nativeCodexTaskLaunch: false },
   });
 
   const result = await request(baseUrl, "/api/projects");

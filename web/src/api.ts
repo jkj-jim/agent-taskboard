@@ -1,5 +1,6 @@
 import type {
   ActorIdentity,
+  AgentStartResult,
   AiChatCatalog,
   AiChatAttachmentInput,
   AiChatRun,
@@ -12,6 +13,7 @@ import type {
   IssueRelationType,
   Project,
   Task,
+  NativeCodexTaskLaunchResult,
   TaskboardMetadata,
   TaskDraft,
   TaskStatus,
@@ -296,12 +298,15 @@ export async function createTask(projectId: string, draft: TaskDraft, threadId?:
   return data.task;
 }
 
-export async function updateTask(task: Task, draft: TaskDraft, threadId?: string): Promise<Task> {
-  const data = await request<{ task: Task }>(`/api/tasks/${encodeURIComponent(task.id)}`, {
+export async function updateTask(
+  task: Task,
+  draft: TaskDraft,
+  threadId?: string,
+): Promise<{ task: Task; agentStart?: AgentStartResult }> {
+  return request<{ task: Task; agentStart?: AgentStartResult }>(`/api/tasks/${encodeURIComponent(task.id)}`, {
     method: "PATCH",
     body: JSON.stringify({ version: task.version, ...draft, ...(threadId ? { threadId } : {}) }),
   });
-  return data.task;
 }
 
 export async function moveTask(
@@ -309,15 +314,34 @@ export async function moveTask(
   status: TaskStatus,
   sortOrder: number,
   threadId?: string,
-): Promise<Task> {
-  const data = await request<{ task: Task }>(
+): Promise<{ task: Task; agentStart?: AgentStartResult }> {
+  return request<{ task: Task; agentStart?: AgentStartResult }>(
     `/api/tasks/${encodeURIComponent(task.id)}/move`,
     {
       method: "POST",
       body: JSON.stringify({ version: task.version, status, sortOrder, ...(threadId ? { threadId } : {}) }),
     },
   );
-  return data.task;
+}
+
+export async function launchNativeCodexTask(
+  task: Task,
+  trigger: "status-transition" | "manual",
+  presentation: "background" | "foreground",
+  previousSessionId: string | null,
+): Promise<NativeCodexTaskLaunchResult> {
+  return request<NativeCodexTaskLaunchResult>(
+    `/api/local/codex/tasks/${encodeURIComponent(task.id)}/launch`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedVersion: task.version,
+        trigger,
+        presentation,
+        previousSessionId,
+      }),
+    },
+  );
 }
 
 export async function archiveTask(task: Task, threadId?: string): Promise<Task> {

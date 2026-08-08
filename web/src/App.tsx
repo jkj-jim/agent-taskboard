@@ -31,6 +31,7 @@ import {
   listDeviceWorkspaces,
   listProjects,
   listTasks,
+  launchNativeCodexTask,
   moveTask as moveTaskRequest,
   removeTaskRelation,
   restoreTask as restoreTaskRequest,
@@ -396,7 +397,7 @@ function isLocalTaskboardOrigin(origin: string): boolean {
   try {
     const { protocol, hostname } = new URL(origin);
     return (protocol === "http:" || protocol === "https:")
-      && (hostname === "127.0.0.1" || hostname === "localhost");
+      && (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]" || hostname === "::1");
   } catch {
     return false;
   }
@@ -406,6 +407,19 @@ function sortTasks(tasks: Task[]): Task[] {
   return [...tasks].sort(
     (left, right) => left.sortOrder - right.sortOrder || left.createdAt.localeCompare(right.createdAt),
   );
+}
+
+function taskAgentSessionId(task: Task, agentKind: AgentKind): string | null {
+  return task.agentSessions?.find((session) => session.agentKind === agentKind)?.sessionId
+    ?? (agentKind === "codex" ? task.threadId : null);
+}
+
+function shouldAutoLaunchCodex(previous: Task, task: Task): boolean {
+  if (task.status !== "in_progress" || agentByActorId(task.assignee.id)?.kind !== "codex") {
+    return false;
+  }
+  return previous.status !== "in_progress"
+    || (previous.status === "in_progress" && previous.assignee.id !== task.assignee.id);
 }
 
 function taskToDraft(task: Task): TaskDraft {
@@ -1088,6 +1102,8 @@ export function App() {
         && current.realtime?.intervalMs === metadata.realtime?.intervalMs
         && current.manageTaskboardSkillPath === metadata.manageTaskboardSkillPath
         && current.localCapabilities?.available === metadata.localCapabilities?.available
+        && current.capabilities?.localAiChat === metadata.capabilities?.localAiChat
+        && current.capabilities?.nativeCodexTaskLaunch === metadata.capabilities?.nativeCodexTaskLaunch
           ? current
           : metadata
       ));
@@ -1295,7 +1311,7 @@ export function App() {
   ) {
     const candidate = tasksRef.current.find((task) => task.id === changed.id);
     const current = candidate && candidate.version >= changed.version ? candidate : changed;
-    const restored = await updateTaskRequest(current, {
+    const { task: restored } = await updateTaskRequest(current, {
       ...taskToDraft(snapshot),
       ...(assigneeTarget ? { assigneeTarget } : {}),
     });
@@ -1400,6 +1416,37 @@ export function App() {
     setBoardView(view);
   }
 
+  function unavailableNativeCodexMessage(identifier: string): string {
+    return isLocalTaskboardOrigin(window.location.origin)
+      ? `${identifier} 已更新。Codex 客户端未就绪，请在客户端中打开此议题。`
+      : `${identifier} 已更新。请回到运行 Codex 的电脑后，在客户端中打开此议题。`;
+  }
+
+  async function autoLaunchCodex(
+    previous: Task,
+    task: Task,
+  ): Promise<{ task: Task; started: boolean }> {
+    if (!shouldAutoLaunchCodex(previous, task)) return { task, started: false };
+    if (taskboardMetadata?.capabilities?.nativeCodexTaskLaunch !== true) {
+      setActionError(unavailableNativeCodexMessage(task.identifier));
+      return { task, started: false };
+    }
+    try {
+      const result = await launchNativeCodexTask(
+        task,
+        "status-transition",
+        "background",
+        taskAgentSessionId(task, "codex"),
+      );
+      return { task: result.task, started: true };
+    } catch (error) {
+      setActionError(
+        `${task.identifier} 已进入进行中，但未能在 Codex 客户端启动：${errorMessage(error)}`,
+      );
+      return { task, started: false };
+    }
+  }
+
   async function saveEditor(
     draft: TaskDraft,
     attachments: File[],
@@ -1409,9 +1456,19 @@ export function App() {
     setActionError(null);
     try {
       const creating = editor.task === null;
-      let saved = editor.task
-        ? await updateTaskRequest(editor.task, draft)
-        : await createTaskRequest(selectedProjectId, draft);
+      let agentStart;
+      let nativeCodexStarted = false;
+      let saved: Task;
+      if (editor.task) {
+        const result = await updateTaskRequest(editor.task, draft);
+        saved = result.task;
+        agentStart = result.agentStart;
+        const nativeLaunch = await autoLaunchCodex(editor.task, saved);
+        saved = nativeLaunch.task;
+        nativeCodexStarted = nativeLaunch.started;
+      } else {
+        saved = await createTaskRequest(selectedProjectId, draft);
+      }
       if (creating) {
         setProjects((current) => current.map((project) => (
           project.id === selectedProjectId
@@ -1438,7 +1495,7 @@ export function App() {
             inlineImages,
             inlineAttachments,
           );
-          saved = await updateTaskRequest(saved, { ...draft, description });
+          ({ task: saved } = await updateTaskRequest(saved, { ...draft, description }));
         }
       }
       setTasks((current) => sortTasks([
@@ -1463,8 +1520,17 @@ export function App() {
         const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
         if (!draft.assigneeTarget || previousAssigneeTarget) {
           pushUndo(
-            `${saved.identifier} 已更新。`,
+            nativeCodexStarted
+              ? `${saved.identifier} 已更新，Codex 已在后台开始处理。`
+              : agentStart?.status === "started"
+              ? `${saved.identifier} 已更新，${agentLabel(agentStart.agentKind)} 已开始处理。`
+              : `${saved.identifier} 已更新。`,
             () => restoreTaskDetails(previous, saved, previousAssigneeTarget),
+          );
+        }
+        if (agentStart?.status === "failed") {
+          setActionError(
+            `${saved.identifier} 已更新，但未能启动 ${agentLabel(agentStart.agentKind)}：${agentStart.error}`,
           );
         }
       }
@@ -1524,19 +1590,34 @@ export function App() {
     )));
 
     try {
-      const moved = await moveTaskRequest(task, status, sortOrder);
+      const movedResult = await moveTaskRequest(task, status, sortOrder);
+      const nativeLaunch = await autoLaunchCodex(task, movedResult.task);
+      const moved = nativeLaunch.task;
+      const { agentStart } = movedResult;
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === moved.id ? moved : candidate,
       )));
-      const message = task.status === status
+      const moveMessage = task.status === status
         ? `${task.identifier} 排序已调整。`
         : `${task.identifier} 已移至${STATUS_DETAILS[status].label}。`;
+      const message = nativeLaunch.started
+        ? `${moveMessage} Codex 已在后台开始处理。`
+        : agentStart?.status === "started"
+        ? `${moveMessage} ${agentLabel(agentStart.agentKind)} 已开始处理。`
+        : moveMessage;
       pushUndo(message, async () => {
         const candidate = tasksRef.current.find((current) => current.id === moved.id);
         const current = candidate && candidate.version >= moved.version ? candidate : moved;
-        const restored = await moveTaskRequest(current, previous.status, previous.sortOrder);
+        const { task: restored } = await moveTaskRequest(current, previous.status, previous.sortOrder);
         setTasks((tasks) => sortTasks(tasks.map((item) => item.id === restored.id ? restored : item)));
       }, !silent);
+      if ((nativeLaunch.started || agentStart?.status === "started") && silent) {
+        setAnnouncementValue(message);
+      } else if (agentStart?.status === "failed") {
+        setActionError(
+          `${task.identifier} 已移至进行中，但未能启动 ${agentLabel(agentStart.agentKind)}：${agentStart.error}`,
+        );
+      }
     } catch (error) {
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === previous.id ? previous : candidate,
@@ -1580,15 +1661,30 @@ export function App() {
     ));
 
     try {
-      const updated = await updateTaskRequest(task, { ...taskToDraft(task), ...changes });
+      const updateResult = await updateTaskRequest(
+        task,
+        { ...taskToDraft(task), ...changes },
+      );
+      const nativeLaunch = await autoLaunchCodex(task, updateResult.task);
+      const updated = nativeLaunch.task;
+      const { agentStart } = updateResult;
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === updated.id ? updated : candidate,
       )));
       const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
       if (!assigneeTarget || previousAssigneeTarget) {
         pushUndo(
-          message ?? `${task.identifier} 已更新。`,
+          message ?? (nativeLaunch.started
+            ? `${task.identifier} 已更新，Codex 已在后台开始处理。`
+            : agentStart?.status === "started"
+            ? `${task.identifier} 已更新，${agentLabel(agentStart.agentKind)} 已开始处理。`
+            : `${task.identifier} 已更新。`),
           () => restoreTaskDetails(previous, updated, previousAssigneeTarget),
+        );
+      }
+      if (agentStart?.status === "failed") {
+        setActionError(
+          `${task.identifier} 已更新，但未能启动 ${agentLabel(agentStart.agentKind)}：${agentStart.error}`,
         );
       }
       return updated;
@@ -1651,7 +1747,7 @@ export function App() {
     }
   }
 
-  async function archiveTask(task: Task) {
+  async function archiveTask(task: Task): Promise<boolean> {
     setActionError(null);
     try {
       const archived = await archiveTaskRequest(task);
@@ -1663,12 +1759,20 @@ export function App() {
           restored,
         ]));
       });
+      return true;
     } catch (error) {
       setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
         ? "该议题已在其他位置更新，看板已重新同步。"
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
+      return false;
     }
+  }
+
+  async function archiveDetailTask(task: Task) {
+    const archived = await archiveTask(task);
+    if (archived) closeTaskDetail();
+    return archived;
   }
 
   async function copyText(text: string, message: string) {
@@ -1699,11 +1803,7 @@ export function App() {
     window.parent.postMessage({ type: "taskboard:expand-sidebar" }, "*");
   }
 
-  function openTaskInThread(task: Task) {
-    if (!manageTaskboardSkillPath) {
-      setActionError("任务面板还没有读取到 manage-taskboard Skill 路径，请刷新后重试。");
-      return;
-    }
+  async function openTaskInThread(task: Task) {
     const worktreePath = task.developmentContext?.type === "worktree"
       ? task.developmentContext.path
       : null;
@@ -1711,14 +1811,11 @@ export function App() {
       ?? selectedDeviceWorkspacePath
       ?? developmentScan.workspacePath
       ?? hostContext?.workspacePath;
-    const instruction = `e-taskboard Addressing the issues mentioned in ${task.identifier}`;
     // The assignee decides which client picks the work up.
     const agentKind = agentByActorId(task.assignee.id)?.kind ?? "codex";
-    const prompt = agentKind === "codex"
-      ? `[$manage-taskboard](${manageTaskboardSkillPath}) ${instruction}`
-      : `Use the manage-taskboard skill to address the issues mentioned in ${task.identifier}.`;
+    const prompt = `Use the manage-taskboard skill to address the issues mentioned in ${task.identifier}.`;
 
-    if (agentKind !== "codex" || !embedded || window.parent === window) {
+    if (agentKind !== "codex") {
       const link = agentNewSessionLink(agentKind, { prompt, workspacePath });
       if (!link) {
         setActionError(`无法在 ${agentLabel(agentKind)} 中开始这个议题。`);
@@ -1727,25 +1824,34 @@ export function App() {
       window.location.assign(link);
       return;
     }
+    if (taskboardMetadata?.capabilities?.nativeCodexTaskLaunch !== true) {
+      setActionError(isLocalTaskboardOrigin(window.location.origin)
+        ? "Codex 客户端未就绪，请在客户端中打开此议题。"
+        : "请回到运行 Codex 的电脑后，在客户端中打开此议题。");
+      return;
+    }
     if (openingThreadTaskId) return;
-    const codexProject = hostContext?.projects?.find((project) => project.id === selectedProject?.id);
     setOpeningThreadTaskId(task.id);
     setActionError(null);
-    window.parent.postMessage({
-      type: "taskboard:create-thread",
-      payload: {
-        taskId: task.id,
-        identifier: task.identifier,
-        instruction,
-        skillName: "manage-taskboard",
-        skillDisplayName: "Manage Taskboard",
-        skillPath: manageTaskboardSkillPath,
-        codexProjectId: codexProject?.id ?? (selectedProject?.id === "local" ? hostContext?.projectId : selectedProject?.id),
-        projectName: selectedProject?.name,
-        workspacePath,
-        workspaceLabel: worktreePath ? workspaceName(worktreePath) : undefined,
-      },
-    }, "*");
+    try {
+      const result = await launchNativeCodexTask(
+        task,
+        "manual",
+        "foreground",
+        taskAgentSessionId(task, "codex"),
+      );
+      setTasks((current) => sortTasks(current.map((candidate) => (
+        candidate.id === result.task.id ? result.task : candidate
+      ))));
+      if (!embedded || window.parent === window) {
+        const link = agentSessionLink("codex", result.sessionId);
+        if (link) window.location.assign(link);
+      }
+    } catch (error) {
+      setActionError(`无法在 Codex 中创建原生任务：${errorMessage(error)}`);
+    } finally {
+      setOpeningThreadTaskId(null);
+    }
   }
 
   function changeProject(projectId: string) {
@@ -2211,6 +2317,7 @@ export function App() {
             )}
             onOpenThread={openThread}
             onOpenInThread={openTaskInThread}
+            onArchive={archiveDetailTask}
             openingThread={openingThreadTaskId === detailTask.id}
             onError={setActionError}
             onAnnounce={setAnnouncement}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -505,6 +505,10 @@ test("configured server proxies business APIs without touching local rows and ad
   const app = createTaskboardServer({
     dataDirectory: directory,
     cloudConfigPath: configPath,
+    codexDesktopController: {
+      async inspect() { return { available: false }; },
+      async createTask() { throw new Error("Codex desktop unavailable in fixture"); },
+    },
     remoteFetch: async (url, init) => {
       upstreamCalls.push({ url: url.toString(), init });
       return jsonResponse({ tasks: [{ id: "REMOTE-1", projectId: "portfolio" }] });
@@ -519,7 +523,7 @@ test("configured server proxies business APIs without touching local rows and ad
       mode: "cloud",
       realtime: { transport: "poll", intervalMs: 2000 },
       localCapabilities: { available: true },
-      capabilities: { localAiChat: true },
+      capabilities: { localAiChat: true, nativeCodexTaskLaunch: false },
       manageTaskboardSkillPath: app.options.skillPath,
     });
     const session = await fetch(`${baseUrl}/api/local/cloud-session`)
@@ -531,6 +535,86 @@ test("configured server proxies business APIs without touching local rows and ad
     assert.equal(upstreamCalls.length, 1);
     assert.equal(upstreamCalls[0].url, "https://tasks.example.test/api/tasks");
     assert.equal(app.database.listTasks({}).length, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("the local companion launches a native Codex task and binds it back to the cloud issue", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-cloud-native-launch-"));
+  temporaryDirectories.push(directory);
+  const configPath = path.join(directory, "companion.json");
+  const { createCloudConfigStore } = await importCloudConfig();
+  const store = createCloudConfigStore({ configPath });
+  await store.configure({
+    remoteUrl: "https://tasks.example.test",
+    actorName: "Alice",
+    sharedKey: "two-person-shared-key",
+  });
+  await store.setProjectWorkspace("portfolio", directory);
+  const sessionId = "55555555-5555-4555-8555-555555555555";
+  const remoteTask = {
+    id: "remote-task-id",
+    identifier: "PORTFOLIO-1",
+    projectId: "portfolio",
+    title: "Native launch",
+    status: "in_progress",
+    version: 7,
+    threadId: null,
+    developmentContext: { type: "branch", branch: "main" },
+    assignee: { type: "agent", id: "codex-agent", name: "Codex Agent", avatarUrl: null },
+  };
+  const upstreamCalls = [];
+  const nativeLaunches = [];
+  const app = createTaskboardServer({
+    dataDirectory: directory,
+    cloudConfigPath: configPath,
+    codexDesktopController: {
+      async inspect() { return { available: true }; },
+      async createTask(input) {
+        nativeLaunches.push(input);
+        return { sessionId };
+      },
+    },
+    remoteFetch: async (url, init) => {
+      upstreamCalls.push({ url: url.toString(), init });
+      if (init.method === "GET") return jsonResponse({ task: remoteTask });
+      return jsonResponse({
+        task: { ...remoteTask, version: 8, threadId: sessionId },
+      });
+    },
+  });
+  const address = await app.listen({ port: 0 });
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const launched = await fetch(
+      `${baseUrl}/api/local/codex/tasks/${remoteTask.id}/launch`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedVersion: remoteTask.version,
+          trigger: "status-transition",
+          presentation: "background",
+          previousSessionId: null,
+        }),
+      },
+    );
+    assert.equal(launched.status, 200);
+    const payload = await launched.json();
+    assert.equal(payload.sessionId, sessionId);
+    assert.equal(payload.task.threadId, sessionId);
+    assert.equal(nativeLaunches.length, 1);
+    assert.equal(nativeLaunches[0].workspacePath, await realpath(directory));
+    assert.deepEqual(upstreamCalls.map((call) => [new URL(call.url).pathname, call.init.method]), [
+      ["/api/tasks/remote-task-id", "GET"],
+      ["/api/tasks/remote-task-id/agent-sessions", "POST"],
+    ]);
+    assert.deepEqual(await new Response(upstreamCalls[1].init.body).json(), {
+      agentKind: "codex",
+      sessionId,
+      previousSessionId: null,
+    });
   } finally {
     await app.close();
   }
@@ -556,6 +640,10 @@ test("cloud mode exposes machine capabilities only to loopback while local mode 
   const app = createTaskboardServer({
     dataDirectory: directory,
     cloudConfigPath: configPath,
+    codexDesktopController: {
+      async inspect() { return { available: false }; },
+      async createTask() { throw new Error("Codex desktop unavailable in fixture"); },
+    },
     remoteFetch: async () => {
       upstreamCalls += 1;
       return jsonResponse({ projects: [] });

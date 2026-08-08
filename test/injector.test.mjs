@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 const source = await readFile(new URL("../scripts/codex-injector.mjs", import.meta.url), "utf8");
+const cdpSource = await readFile(new URL("../shared/codex-cdp.mjs", import.meta.url), "utf8");
 const runtimeSource = await readFile(
   new URL("../scripts/codex-injector-runtime.mjs", import.meta.url),
   "utf8",
@@ -63,7 +64,7 @@ test("the package injection command remains resident for tab-triggered recovery"
   assert.match(packageJson.scripts["codex:inject"], /--watch/);
   assert.match(packageJson.scripts["codex:daemon"], /--daemon --open/);
   assert.match(source, /function startResidentInjector/);
-  assert.match(source, /const defaultCodexDebuggingPort = 9229/);
+  assert.match(source, /const defaultCodexDebuggingPort = DEFAULT_CODEX_DEBUGGING_PORT/);
   assert.match(source, /port: defaultCodexDebuggingPort/);
   assert.match(source, /--startup-token/);
   assert.match(source, /__codexTaskboardHostStartupTokenV1/);
@@ -82,15 +83,15 @@ test("attach reconciles the renderer against a hashed current injection source",
 });
 
 test("the injector ignores auxiliary Codex windows", () => {
-  assert.match(source, /!target\.url\?\.includes\("initialRoute=%2Fglobal-dictation"\)/);
+  assert.match(cdpSource, /!target\.url\?\.includes\("initialRoute=%2Fglobal-dictation"\)/);
 });
 
 test("a completed web build refreshes an already-open Codex iframe", () => {
   assert.match(packageJson.scripts.build, /--refresh-if-running/);
   assert.match(packageJson.scripts["codex:refresh"], /--refresh/);
   assert.match(source, /async function refreshTaskboardFrames/);
-  assert.match(source, /function codexDebuggingPorts/);
-  assert.match(source, /--remote-debugging-port=/);
+  assert.match(cdpSource, /function codexDebuggingPorts/);
+  assert.match(cdpSource, /--remote-debugging-port=/);
   assert.match(source, /taskboard\.reloadFrame\(\)/);
   assert.match(source, /__codex_taskboard_refresh/);
   assert.match(source, /await restartResidentInjectorForRefresh\(port\)/);

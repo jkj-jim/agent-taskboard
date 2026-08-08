@@ -38,6 +38,8 @@ test("issue detail and cards expose the same assignee identity", async () => {
   assert.match(detailSource, /detail-property-label">负责人/);
   assert.match(detailSource, /saveTask\(\{ assigneeTarget:/);
   assert.match(cardSource, /card-assignee-avatar/);
+  assert.match(cardSource, /task\.agentSessions\?\.find/);
+  assert.match(cardSource, /session\.agentKind === assignedAgentKind/);
   assert.match(avatarSource, /agentAvatarSrc\(actor\)/);
   assert.match(avatarSource, /actor-avatar-\$\{actor\.type\}/);
   assert.match(styles, /\.card-assignee-avatar/);

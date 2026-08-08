@@ -299,6 +299,10 @@ test("cloud-only local capability routes return an explicit companion requiremen
   const meta = await cloud.request("/api/meta", { actorName: alice });
   assert.equal(meta.response.status, 200);
   assert.equal(meta.body.mode, "cloud");
+  assert.deepEqual(meta.body.capabilities, {
+    localAiChat: false,
+    nativeCodexTaskLaunch: false,
+  });
   assert.deepEqual(meta.body.realtime, { transport: "poll", intervalMs: 2000 });
   assert.equal(meta.body.localCapabilities.available, false);
 
@@ -351,6 +355,61 @@ test("task lifecycle keeps optimistic versions and never persists a worktree pat
   });
   assert.equal(restored.response.status, 200);
   assert.equal(restored.body.task.archivedAt, null);
+});
+
+test("cloud Codex session binding is idempotent and rejects compare-and-set conflicts", async () => {
+  await createProject("session-binding");
+  const created = await createTask("session-binding", "Bind native Codex task", alice, {
+    assigneeTarget: "codex-agent",
+  });
+  const firstSessionId = "11111111-1111-4111-8111-111111111111";
+  const secondSessionId = "22222222-2222-4222-8222-222222222222";
+  const bound = await cloud.request(
+    `/api/tasks/${created.body.task.id}/agent-sessions`,
+    {
+      method: "POST",
+      actorName: alice,
+      json: {
+        agentKind: "codex",
+        sessionId: firstSessionId,
+        previousSessionId: null,
+      },
+    },
+  );
+  assert.equal(bound.response.status, 200);
+  assert.equal(bound.body.task.threadId, firstSessionId);
+  assert.equal(bound.body.task.version, created.body.task.version + 1);
+
+  const idempotent = await cloud.request(
+    `/api/tasks/${created.body.task.id}/agent-sessions`,
+    {
+      method: "POST",
+      actorName: bob,
+      json: {
+        agentKind: "codex",
+        sessionId: firstSessionId,
+        previousSessionId: null,
+      },
+    },
+  );
+  assert.equal(idempotent.response.status, 200);
+  assert.equal(idempotent.body.task.version, bound.body.task.version);
+
+  const conflict = await cloud.request(
+    `/api/tasks/${created.body.task.id}/agent-sessions`,
+    {
+      method: "POST",
+      actorName: bob,
+      json: {
+        agentKind: "codex",
+        sessionId: secondSessionId,
+        previousSessionId: null,
+      },
+    },
+  );
+  assert.equal(conflict.response.status, 409);
+  assert.equal(conflict.body.error.code, "AGENT_SESSION_CONFLICT");
+  assert.equal(conflict.body.error.details.currentSessionId, firstSessionId);
 });
 
 test("relation direction, deletion, and parent-cycle checks match the local contract", async () => {

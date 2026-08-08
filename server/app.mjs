@@ -22,12 +22,17 @@ import {
   agentByActorId,
   agentByAssigneeTarget,
   agentByKind,
+  isAgentKind,
   isAssigneeTarget,
 } from "../shared/agents.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { createAgentRegistry } from "./agents/index.mjs";
 import { createDeviceWorkspaces } from "./agents/workspaces.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
+import {
+  createCodexDesktopController,
+  createCodexTaskLaunchCoordinator,
+} from "./codex-desktop-controller.mjs";
 import {
   CloudProxyError,
   createCloudProxy,
@@ -491,6 +496,59 @@ function parseProjectCreate(body) {
 function parseThreadId(value) {
   if (value === undefined) return undefined;
   return stringField(value, "threadId", { required: true, maxLength: 256 });
+}
+
+function parseAgentSessionBinding(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set(["agentKind", "sessionId", "previousSessionId"]));
+  if (!isAgentKind(body.agentKind)) {
+    throw new ApiError(400, "INVALID_FIELD", "'agentKind' is not a supported agent");
+  }
+  if (!Object.hasOwn(body, "previousSessionId")) {
+    throw new ApiError(400, "INVALID_FIELD", "'previousSessionId' is required");
+  }
+  return {
+    agentKind: body.agentKind,
+    sessionId: stringField(body.sessionId, "sessionId", { required: true, maxLength: 256 }),
+    previousSessionId: stringField(body.previousSessionId, "previousSessionId", {
+      nullable: true,
+      maxLength: 256,
+    }),
+  };
+}
+
+function parseNativeCodexLaunch(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set([
+    "expectedVersion",
+    "trigger",
+    "presentation",
+    "previousSessionId",
+  ]));
+  if (!new Set(["status-transition", "manual"]).has(body.trigger)) {
+    throw new ApiError(400, "INVALID_FIELD", "'trigger' must be status-transition or manual");
+  }
+  if (!new Set(["background", "foreground"]).has(body.presentation)) {
+    throw new ApiError(400, "INVALID_FIELD", "'presentation' must be background or foreground");
+  }
+  if (!Object.hasOwn(body, "previousSessionId")) {
+    throw new ApiError(400, "INVALID_FIELD", "'previousSessionId' is required");
+  }
+  if (
+    (body.trigger === "status-transition" && body.presentation !== "background")
+    || (body.trigger === "manual" && body.presentation !== "foreground")
+  ) {
+    throw new ApiError(400, "INVALID_FIELD", "The launch trigger and presentation do not match");
+  }
+  return {
+    expectedVersion: parseVersion(body.expectedVersion),
+    trigger: body.trigger,
+    presentation: body.presentation,
+    previousSessionId: stringField(body.previousSessionId, "previousSessionId", {
+      nullable: true,
+      maxLength: 256,
+    }),
+  };
 }
 
 function requestHeader(request, name) {
@@ -1375,6 +1433,11 @@ export function createTaskboardServer(options = {}) {
       )) ?? null;
     },
   });
+  const deviceWorkspaces = createDeviceWorkspaces({
+    codexStatePath: resolved.codexStatePath,
+    database,
+    readProjectMappings: async () => (await cloudConfig.read()).projectMappings,
+  });
   const agents = createAgentRegistry({
     codex: {
       executable: resolved.codexExecutable,
@@ -1386,11 +1449,7 @@ export function createTaskboardServer(options = {}) {
       executable: resolved.claudeExecutable,
       claudeHome: resolved.claudeHome,
       database,
-      deviceWorkspaces: createDeviceWorkspaces({
-        codexStatePath: resolved.codexStatePath,
-        database,
-        readProjectMappings: async () => (await cloudConfig.read()).projectMappings,
-      }),
+      deviceWorkspaces,
     },
   });
   const aiChat = new AiChatService({
@@ -1400,8 +1459,132 @@ export function createTaskboardServer(options = {}) {
     taskboardUrl: `http://127.0.0.1:${resolvePort()}`,
     taskctlBinDirectory: path.join(resolved.dataDirectory, "bin"),
     taskctlCliPath: path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
+    onIssueSession: ({ issueId }) => {
+      const task = database.getTask(issueId);
+      if (task) events.emit("task.updated", { task });
+    },
   });
   const aiEventResponses = new Set();
+  const codexDefinition = agentByKind("codex");
+  const codexDesktopController = options.codexDesktopController
+    ?? createCodexDesktopController({ preferredPort: options.codexDebuggingPort });
+
+  function requestHeadersForCloud(request) {
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(request.headers)) {
+      if (Array.isArray(value)) value.forEach((entry) => headers.append(name, entry));
+      else if (value !== undefined) headers.set(name, value);
+    }
+    headers.delete("content-length");
+    headers.delete("transfer-encoding");
+    return headers;
+  }
+
+  async function cloudJson(request, pathname, method = "GET", body = undefined) {
+    const headers = requestHeadersForCloud(request);
+    const init = { method, headers };
+    if (body !== undefined) {
+      headers.set("content-type", "application/json");
+      init.body = JSON.stringify(body);
+    }
+    const upstream = await cloudProxy.forward(new Request(`http://127.0.0.1${pathname}`, init));
+    const payload = await upstream.json().catch(() => ({}));
+    if (!upstream.ok) {
+      throw new CloudProxyError(
+        upstream.status,
+        payload.error?.code ?? "REMOTE_ERROR",
+        payload.error?.message ?? "Cloud taskboard request failed",
+        payload.error?.details,
+      );
+    }
+    return payload;
+  }
+
+  const codexTaskLauncher = createCodexTaskLaunchCoordinator({
+    desktopController: codexDesktopController,
+    skillPath: resolved.skillPath,
+    codexActorId: codexDefinition.actor.id,
+    loadTask: async (taskId, input) => {
+      if (input.cloud) {
+        return (await cloudJson(
+          input.sourceRequest,
+          `/api/tasks/${encodeURIComponent(taskId)}`,
+        )).task;
+      }
+      return withAgentSessions(database, database.getTask(taskId));
+    },
+    resolveWorkspace: async (task) => {
+      if (task.developmentContext?.type === "worktree" && task.developmentContext.path) {
+        try {
+          if ((await stat(task.developmentContext.path)).isDirectory()) {
+            return path.resolve(task.developmentContext.path);
+          }
+        } catch {}
+      }
+      return (await deviceWorkspaces()).get(task.projectId) ?? null;
+    },
+    bindSession: async (binding, input) => {
+      if (input.cloud) {
+        const { taskId, ...payload } = binding;
+        return (await cloudJson(
+          input.sourceRequest,
+          `/api/tasks/${encodeURIComponent(taskId)}/agent-sessions`,
+          "POST",
+          payload,
+        )).task;
+      }
+      const task = database.bindAgentSession(
+        binding.taskId,
+        binding.agentKind,
+        binding.sessionId,
+        binding.previousSessionId,
+      );
+      const decorated = withAgentSessions(database, task);
+      events.emit("task.updated", { task: decorated });
+      return decorated;
+    },
+  });
+
+  async function startAssignedAgentOnTransition(request, previous, task) {
+    const enteredInProgress = previous.status !== "in_progress" && task.status === "in_progress";
+    const assignedAgentInProgress = previous.status === "in_progress"
+      && task.status === "in_progress"
+      && previous.assignee.id !== task.assignee.id;
+    if (
+      actorFromRequest(request).type !== "user"
+      || (!enteredInProgress && !assignedAgentInProgress)
+      || task.assignee.type !== "agent"
+    ) {
+      return null;
+    }
+    const agent = agents.list().find((candidate) => candidate.actor.id === task.assignee.id);
+    if (!agent) return null;
+    if (agent.id === codexDefinition.kind) return null;
+
+    try {
+      const thread = await aiChat.createThread({
+        projectId: task.projectId,
+        issueId: task.id,
+        agentKind: agent.id,
+      });
+      const run = await aiChat.startTurn(thread.id, {
+        message: `Address the issues mentioned in ${task.identifier}.`,
+      });
+      return {
+        status: "started",
+        agentKind: agent.id,
+        threadId: thread.id,
+        runId: run.id,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+      return {
+        status: "failed",
+        agentKind: agent.id,
+        error: message.slice(0, 2_000),
+      };
+    }
+  }
 
   const server = createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
@@ -1501,9 +1684,16 @@ export function createTaskboardServer(options = {}) {
         if ([...url.searchParams.keys()].length > 0) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/meta does not accept query parameters");
         }
+        const loopback = isLoopbackAddress(request.socket.remoteAddress);
+        const nativeCodexTaskLaunch = loopback
+          ? (await codexDesktopController.inspect()).available
+          : false;
         return sendJson(response, 200, {
           manageTaskboardSkillPath: resolved.skillPath,
-          capabilities: { localAiChat: isLoopbackAddress(request.socket.remoteAddress) },
+          capabilities: {
+            localAiChat: loopback,
+            nativeCodexTaskLaunch,
+          },
           ...(capabilityCloudConfig?.remoteUrl
             ? {
               mode: "cloud",
@@ -1673,6 +1863,22 @@ export function createTaskboardServer(options = {}) {
             );
           }
         }
+      }
+
+      const nativeCodexLaunchRoute = pathname.match(/^\/api\/local\/codex\/tasks\/([^/]+)\/launch$/);
+      if (nativeCodexLaunchRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "Native Codex task launch");
+        const taskId = decodeRouteSegment(nativeCodexLaunchRoute[1], "Task id");
+        const launch = parseNativeCodexLaunch(await readJson(request));
+        const result = await codexTaskLauncher.launch({
+          ...launch,
+          taskId,
+          cloud: Boolean(currentCloudConfig?.remoteUrl),
+          sourceRequest: request,
+        });
+        return sendJson(response, 200, result);
       }
 
       if (pathname === "/api/projects") {
@@ -2058,7 +2264,7 @@ export function createTaskboardServer(options = {}) {
         return sendEmpty(response, 204);
       }
 
-      const taskRoute = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move))?$/);
+      const taskRoute = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move|agent-sessions))?$/);
       if (taskRoute) {
         let id;
         try {
@@ -2080,16 +2286,22 @@ export function createTaskboardServer(options = {}) {
         }
         if (!action && request.method === "PATCH") {
           const { version, changes, threadId, assigneeTarget } = parseTaskPatch(await readJson(request));
+          const previous = database.getTask(id);
           if (assigneeTarget !== undefined) {
             changes.assignee = resolveAssignee(assigneeTarget, actorFromRequest(request));
           }
           const task = database.updateTask(id, version, changes, codexOnlyThreadId(request, threadId));
           rememberAgentSession(database, request, task.id, threadId);
           events.emit("task.updated", { task });
-          return sendJson(response, 200, { task });
+          const agentStart = await startAssignedAgentOnTransition(request, previous, task);
+          return sendJson(response, 200, {
+            task: withAgentSessions(database, database.getTask(task.id)),
+            ...(agentStart ? { agentStart } : {}),
+          });
         }
         if (action === "move" && request.method === "POST") {
           const move = parseMove(await readJson(request));
+          const previous = database.getTask(id);
           const task = database.moveTask(
             id,
             move.version,
@@ -2099,7 +2311,23 @@ export function createTaskboardServer(options = {}) {
           );
           rememberAgentSession(database, request, task.id, move.threadId);
           events.emit("task.moved", { task });
-          return sendJson(response, 200, { task });
+          const agentStart = await startAssignedAgentOnTransition(request, previous, task);
+          return sendJson(response, 200, {
+            task: withAgentSessions(database, database.getTask(task.id)),
+            ...(agentStart ? { agentStart } : {}),
+          });
+        }
+        if (action === "agent-sessions" && request.method === "POST") {
+          const binding = parseAgentSessionBinding(await readJson(request));
+          const task = database.bindAgentSession(
+            id,
+            binding.agentKind,
+            binding.sessionId,
+            binding.previousSessionId,
+          );
+          const decorated = withAgentSessions(database, task);
+          events.emit("task.updated", { task: decorated });
+          return sendJson(response, 200, { task: decorated });
         }
         if (action === "archive" && request.method === "POST") {
           const { version, threadId } = parseArchive(await readJson(request));

@@ -10,10 +10,14 @@ const source = await readFile(sourceUrl, "utf8");
 const webStyles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const webApp = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
 const webAgents = await readFile(new URL("../web/src/agents.ts", import.meta.url), "utf8");
+const desktopController = await readFile(
+  new URL("../server/codex-desktop-controller.mjs", import.meta.url),
+  "utf8",
+);
 
 test("injection is an idempotent IIFE guarded by its current source hash", () => {
   assert.match(source, /^\(\(\) => \{/);
-  assert.match(source, /const VERSION = "0\.6\.8"/);
+  assert.match(source, /const VERSION = "0\.7\.0"/);
   assert.match(source, /const SOURCE_HASH = window\.__CODEX_TASKBOARD_SOURCE_HASH__/);
   assert.match(source, /const SENTINEL_KEY = "__codexTaskboardInjection__"/);
   assert.match(source, /previous\?\.sourceHash === SOURCE_HASH/);
@@ -220,36 +224,24 @@ test("only a loopback Taskboard iframe can request native automation", () => {
   );
 });
 
-test("issues open an unsent native Codex composer in the exact workspace with a Skill mention", () => {
-  assert.match(source, /function createThreadForTask\(payload\)/);
-  assert.match(source, /\[data-app-action-sidebar-select-project\]/);
-  assert.match(source, /data-codex-composer/);
-  assert.match(source, /type: "electron-set-active-workspace-root"/);
-  assert.match(source, /root: workspacePath/);
-  assert.doesNotMatch(source, /prefillPrompt: prompt/);
-  assert.match(source, /requestHostTaskComposerPrefill\(\{/);
+test("native Codex launches preserve background UI and submit a verified Skill prompt", () => {
+  assert.match(source, /function beginNativeTaskLaunch\(presentation\)/);
+  assert.match(source, /presentation === "foreground"/);
+  assert.match(source, /revealNativeContentBehindTaskboard\(\)/);
+  assert.match(source, /revealNativeContentBehindTaskboard\(\);\s*restoreNativeSelection\(\)/);
+  assert.match(source, /function endNativeTaskLaunch\(success = true\)/);
+  assert.match(source, /function prefillNativeTask\(payload\)/);
   assert.match(source, /requestHost\("prefill-task-composer"/);
-  assert.match(source, /function waitForPreparedComposer\(identifier, skillPath\)/);
-  assert.match(source, /\[skill-mention-name\]/);
-  assert.match(source, /mention\.getAttribute\("skill-mention-path"\) === skillPath/);
-  assert.doesNotMatch(source, /submit\.click\(\)/);
-  assert.match(source, /type: "taskboard:thread-prepared"/);
-  assert.doesNotMatch(source, /function waitForCreatedThread/);
-  assert.doesNotMatch(source, /type: "taskboard:thread-created"/);
-  assert.doesNotMatch(webApp, /taskboard:thread-created/);
-  assert.match(
-    webApp,
-    /const instruction = `e-taskboard Addressing the issues mentioned in \$\{task\.identifier\}`/,
-  );
-  assert.match(
-    webApp,
-    /\? `\[\$manage-taskboard\]\(\$\{manageTaskboardSkillPath\}\) \$\{instruction\}`/,
-  );
-  assert.match(webApp, /skillName: "manage-taskboard"/);
-  assert.match(webApp, /skillDisplayName: "Manage Taskboard"/);
-  assert.match(webApp, /skillPath: manageTaskboardSkillPath/);
-  assert.match(webApp, /instruction,/);
-  assert.match(webApp, /type: "taskboard:create-thread"/);
+  assert.match(desktopController, /type: 'electron-set-active-workspace-root'/);
+  assert.match(desktopController, /label === 'plan' \|\| label === '计划'/);
+  assert.match(desktopController, /skillName: "manage-taskboard"/);
+  assert.match(desktopController, /candidate\.getAttribute\('skill-mention-path'\) === skillPath/);
+  assert.match(desktopController, /submit\.click\(\)/);
+  assert.match(desktopController, /CODEX_THREAD_ID\.test\(value\)/);
+  assert.match(desktopController, /await restoreRoute\(cdp, snapshot\.activeThreadId\)/);
+  assert.match(webApp, /launchNativeCodexTask\([\s\S]*?"status-transition"[\s\S]*?"background"/);
+  assert.match(webApp, /launchNativeCodexTask\([\s\S]*?"manual"[\s\S]*?"foreground"/);
+  assert.doesNotMatch(webApp, /type: "taskboard:create-thread"/);
   assert.match(webApp, /type: "taskboard:open-thread", payload: \{ threadId \}/);
 });
 
@@ -276,12 +268,13 @@ test("host navigation follows Codex's renderer message bus", () => {
   assert.doesNotMatch(source, /new CustomEvent\("codex-message-from-view"/);
 });
 
-test("the standalone web page opens unlinked issues as prefilled empty Codex tasks", () => {
+test("Claude keeps its client deep link while Codex uses the native launch API", () => {
   assert.match(webAgents, /const query = new URLSearchParams\(\)/);
   assert.match(webAgents, /query\.set\("path", workspacePath\)/);
   assert.match(webAgents, /query\.set\("prompt", prompt\)/);
   assert.match(webAgents, /return `codex:\/\/new\?\${query/);
-  assert.match(webApp, /agentNewSessionLink\(agentKind, \{ prompt, workspacePath \}\)/);
+  assert.match(webApp, /if \(agentKind !== "codex"\)[\s\S]*agentNewSessionLink\(agentKind, \{ prompt, workspacePath \}\)/);
+  assert.match(webApp, /taskboardMetadata\?\.capabilities\?\.nativeCodexTaskLaunch/);
 });
 
 test("host context captures all Codex projects even when the sidebar section is collapsed", () => {

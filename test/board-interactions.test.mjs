@@ -153,6 +153,15 @@ test("issues expose processing conversations without manual binding", () => {
   assert.match(contextMenuSource, /onOpenInThread/);
 });
 
+test("issue details provide a confirmed delete action that returns to the board", () => {
+  assert.match(detailSource, /className="detail-delete-action"/);
+  assert.match(detailSource, /setArchiveConfirmationOpen\(true\)/);
+  assert.match(detailSource, /id="delete-issue-title">删除这个议题？/);
+  assert.match(detailSource, /await onArchive\(currentTask\)/);
+  assert.match(appSource, /async function archiveDetailTask[\s\S]*?if \(archived\) closeTaskDetail\(\)/);
+  assert.match(appSource, /<TaskDetail[\s\S]*?onArchive=\{archiveDetailTask\}/);
+});
+
 test("issues bind one workflow from the current project's workflow tabs", () => {
   assert.match(typesSource, /export interface Task \{[\s\S]*?workflowId: string \| null/);
   assert.match(typesSource, /export interface TaskDraft \{[\s\S]*?workflowId: string \| null/);

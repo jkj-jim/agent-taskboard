@@ -43,6 +43,14 @@ export function TaskCard({
   onDragEnd,
   onOpenThread,
 }: TaskCardProps) {
+  const assignedAgentKind = agentByActorId(task.assignee.id)?.kind;
+  const conversation = (
+    task.agentSessions?.find((session) => session.agentKind === assignedAgentKind)
+    ?? task.agentSessions?.[0]
+    ?? (task.threadId
+      ? { agentKind: "codex" as const, sessionId: task.threadId }
+      : null)
+  );
   const dueDate = task.dueDate
     ? new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(`${task.dueDate}T12:00:00`))
     : null;
@@ -153,13 +161,13 @@ export function TaskCard({
             <LinearIcon name="calendar" /> {dueDate}
           </span>
         )}
-        {task.threadId && (
+        {conversation && (
           <button
             className="thread-link"
             type="button"
-            aria-label={`查看对话 ${task.threadId}`}
-            title={`查看对话 ${task.threadId}`}
-            onClick={stopThen(() => onOpenThread(agentByActorId(task.assignee.id)?.kind ?? "codex", task.threadId!))}
+            aria-label={`查看对话 ${conversation.sessionId}`}
+            title={`查看对话 ${conversation.sessionId}`}
+            onClick={stopThen(() => onOpenThread(conversation.agentKind, conversation.sessionId))}
           >
             <LinearIcon name="conversation" />
           </button>

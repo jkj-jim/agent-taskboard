@@ -3,6 +3,7 @@ import {
   DEFAULT_AGENT_KIND,
   agentByAssigneeTarget,
   agentByKind,
+  isAgentKind,
   isAssigneeTarget,
 } from "../../shared/agents.mjs";
 import { normalizeWorkflowSnapshot } from "../../shared/workflow-control-flow.mjs";
@@ -251,6 +252,25 @@ function parseDevelopmentContext(value) {
 function parseThreadId(value) {
   if (value === undefined) return undefined;
   return stringField(value, "threadId", { required: true, maxLength: 256 });
+}
+
+function parseAgentSessionBinding(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set(["agentKind", "sessionId", "previousSessionId"]));
+  if (!isAgentKind(body.agentKind)) {
+    throw new ApiError(400, "INVALID_FIELD", "'agentKind' is not a supported agent");
+  }
+  if (!Object.hasOwn(body, "previousSessionId")) {
+    throw new ApiError(400, "INVALID_FIELD", "'previousSessionId' is required");
+  }
+  return {
+    agentKind: body.agentKind,
+    sessionId: stringField(body.sessionId, "sessionId", { required: true, maxLength: 256 }),
+    previousSessionId: stringField(body.previousSessionId, "previousSessionId", {
+      nullable: true,
+      maxLength: 256,
+    }),
+  };
 }
 
 function parseWorkflowId(value) {
@@ -1281,6 +1301,58 @@ async function moveTask(env, id, input) {
   return getTask(env, current.id);
 }
 
+async function bindAgentSession(env, id, input) {
+  if (input.agentKind !== "codex") {
+    throw new ApiError(
+      400,
+      "UNSUPPORTED_AGENT_SESSION",
+      "Cloud issue links currently support Codex sessions only",
+    );
+  }
+  const current = await requireTaskRow(env, id);
+  if (current.thread_id === input.sessionId) return getTask(env, current.id);
+  if (current.thread_id !== input.previousSessionId) {
+    throw new ApiError(
+      409,
+      "AGENT_SESSION_CONFLICT",
+      "The issue was bound to another agent session",
+      {
+        previousSessionId: input.previousSessionId,
+        currentSessionId: current.thread_id,
+      },
+    );
+  }
+
+  const result = await env.DB.prepare(`
+    UPDATE tasks
+    SET thread_id = ?, version = version + 1, updated_at = ?
+    WHERE id = ?
+      AND version = ?
+      AND ((thread_id IS NULL AND ? IS NULL) OR thread_id = ?)
+  `).bind(
+    input.sessionId,
+    now(),
+    current.id,
+    current.version,
+    input.previousSessionId,
+    input.previousSessionId,
+  ).run();
+  if (!changed(result)) {
+    const latest = await requireTaskRow(env, current.id);
+    if (latest.thread_id === input.sessionId) return getTask(env, current.id);
+    throw new ApiError(
+      409,
+      "AGENT_SESSION_CONFLICT",
+      "The issue was bound to another agent session",
+      {
+        previousSessionId: input.previousSessionId,
+        currentSessionId: latest.thread_id,
+      },
+    );
+  }
+  return getTask(env, current.id);
+}
+
 async function archiveTask(env, id, input) {
   const current = await requireTaskRow(env, id);
   assertTaskVersion(current, input.version);
@@ -1874,6 +1946,10 @@ async function routeApi(request, env, actor, url) {
     return json(200, {
       mode: "cloud",
       manageTaskboardSkillPath: null,
+      capabilities: {
+        localAiChat: false,
+        nativeCodexTaskLaunch: false,
+      },
       realtime: { transport: "poll", intervalMs: 2000 },
       localCapabilities: { available: false },
     });
@@ -2113,7 +2189,7 @@ async function routeApi(request, env, actor, url) {
   }
 
   const taskMatch = pathname.match(
-    /^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move))?$/,
+    /^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move|agent-sessions))?$/,
   );
   if (taskMatch) {
     const taskId = decodePathPart(taskMatch[1], "Task id");
@@ -2139,6 +2215,15 @@ async function routeApi(request, env, actor, url) {
     if (action === "move" && request.method === "POST") {
       return json(200, {
         task: await moveTask(env, taskId, parseMove(await readJson(request))),
+      });
+    }
+    if (action === "agent-sessions" && request.method === "POST") {
+      return json(200, {
+        task: await bindAgentSession(
+          env,
+          taskId,
+          parseAgentSessionBinding(await readJson(request)),
+        ),
       });
     }
     if (action === "archive" && request.method === "POST") {

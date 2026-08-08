@@ -51,6 +51,7 @@ export class AiChatService {
       : options.processEnv ?? process.env;
     this.taskctlBinDirectory = options.taskctlBinDirectory ?? null;
     this.taskctlCliPath = options.taskctlCliPath ?? null;
+    this.onIssueSession = options.onIssueSession ?? null;
     this.taskctlBinReady = null;
     this.killGraceMs = options.killGraceMs ?? 1_000;
     this.active = new Map();
@@ -331,6 +332,7 @@ export class AiChatService {
               this.database.updateAiChatThread(threadId, {
                 agentSessionId: normalized.threadId,
               });
+              this.#rememberIssueSession(thread, agent.id, normalized.threadId);
               continue;
             }
             const event = this.database.insertAiChatEvent({
@@ -534,6 +536,15 @@ export class AiChatService {
   #threadIsActive(thread) {
     return Boolean(thread.currentRun)
       || [...this.active.values()].some((active) => active.threadId === thread.id);
+  }
+
+  #rememberIssueSession(thread, agentKind, sessionId) {
+    const issueId = thread.origin.issueId;
+    if (!issueId) return;
+    this.database.recordAgentSession(issueId, agentKind, sessionId);
+    try {
+      this.onIssueSession?.({ issueId, agentKind, sessionId });
+    } catch {}
   }
 
   async #finishRun({
