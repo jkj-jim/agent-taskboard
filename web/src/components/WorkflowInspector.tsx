@@ -140,31 +140,31 @@ export function WorkflowInspector({
         <div role="tabpanel" aria-label="配置">
           {data.kind === "issue-create" && (
             <div className="workflow-config-section">
-              <h2>创建议题</h2>
+              <h2>创建任务</h2>
               <label>
                 <span>标题</span>
                 <input
-                  aria-label="ISSUE 标题"
+                  aria-label="任务标题"
                   type="text"
                   value={data.createIssueTitle ?? ""}
-                  placeholder="输入议题标题"
+                  placeholder="输入任务标题"
                   onChange={(event) => onChange({ createIssueTitle: event.target.value })}
                 />
               </label>
               <label>
                 <span>描述</span>
                 <textarea
-                  aria-label="ISSUE 描述"
+                  aria-label="任务描述"
                   rows={4}
                   value={data.createIssueDescription ?? ""}
-                  placeholder="补充议题描述…"
+                  placeholder="补充任务描述…"
                   onChange={(event) => onChange({ createIssueDescription: event.target.value })}
                 />
               </label>
               <label>
                 <span>初始状态</span>
                 <select
-                  aria-label="ISSUE 初始状态"
+                  aria-label="任务初始状态"
                   value={data.createIssueStatus ?? "todo"}
                   onChange={(event) => onChange({ createIssueStatus: event.target.value })}
                 >
@@ -176,7 +176,7 @@ export function WorkflowInspector({
               <label>
                 <span>优先级</span>
                 <select
-                  aria-label="ISSUE 优先级"
+                  aria-label="任务优先级"
                   value={data.createIssuePriority ?? "none"}
                   onChange={(event) => onChange({ createIssuePriority: event.target.value })}
                 >
@@ -188,7 +188,7 @@ export function WorkflowInspector({
               <label>
                 <span>标签</span>
                 <input
-                  aria-label="ISSUE 标签"
+                  aria-label="任务标签"
                   type="text"
                   value={data.createIssueLabels ?? ""}
                   placeholder="多个标签用逗号分隔"
@@ -662,9 +662,9 @@ export function WorkflowInspector({
             <div className="workflow-config-section">
               <h2>触发条件</h2>
               <label>
-                <span>议题状态变为</span>
+                <span>任务状态变为</span>
                 <select
-                  aria-label="议题触发状态"
+                  aria-label="任务触发状态"
                   value={data.triggerStatus ?? "todo"}
                   onChange={(event) => onChange({
                     triggerStatus: event.target.value,
@@ -681,24 +681,24 @@ export function WorkflowInspector({
 
           {data.kind === "issue-update" && (
             <div className="workflow-config-section">
-              <h2>议题操作</h2>
+              <h2>任务操作</h2>
               <label>
-                <span>议题选择</span>
+                <span>任务选择</span>
                 <select
-                  aria-label="议题选择"
+                  aria-label="任务选择"
                   value={data.issueTarget ?? "trigger"}
                   onChange={(event) => onChange({ issueTarget: event.target.value })}
                 >
-                  <option value="trigger">触发流程的议题</option>
-                  <option value="upstream">上游节点输出的议题</option>
-                  <option value="specific">指定议题</option>
+                  <option value="trigger">触发流程的任务</option>
+                  <option value="upstream">上游节点输出的任务</option>
+                  <option value="specific">指定任务</option>
                 </select>
               </label>
               {data.issueTarget === "specific" && (
                 <label>
-                  <span>议题 ID</span>
+                  <span>任务 ID</span>
                   <input
-                    aria-label="指定议题 ID"
+                    aria-label="指定任务 ID"
                     type="text"
                     value={data.specificIssueId ?? ""}
                     placeholder="例如 LOCAL-48"
@@ -752,7 +752,7 @@ export function WorkflowInspector({
                   <textarea
                     rows={3}
                     value={data.customComment ?? ""}
-                    placeholder="输入要追加到议题的评论…"
+                    placeholder="输入要追加到任务的评论…"
                     onChange={(event) => onChange({ customComment: event.target.value })}
                   />
                 </label>
@@ -809,7 +809,7 @@ export function WorkflowInspector({
                   checked={data.recordConversation ?? false}
                   onChange={(event) => onChange({ recordConversation: event.target.checked })}
                 />
-                <span>记录执行该议题的 Codex 对话</span>
+                <span>记录执行该任务的 Codex 对话</span>
               </label>
             </div>
           )}

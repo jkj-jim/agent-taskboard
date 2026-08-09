@@ -108,7 +108,7 @@ export function TaskCard({
           )}
         </span>
         <ActorAvatar actor={task.assignee} className="card-assignee-avatar" />
-        <div className="card-actions" aria-label="移动议题">
+        <div className="card-actions" aria-label="移动任务">
           <button
             className="icon-button compact"
             type="button"
@@ -134,18 +134,18 @@ export function TaskCard({
 
       <h3 id={`task-${task.id}-title`}>{task.title}</h3>
 
-      <div className="card-properties" aria-label="议题属性">
+      <div className="card-properties" aria-label="任务属性">
         <span className={`priority-icon priority-icon-${task.priority}`} title={PRIORITY_LABELS[task.priority]}>
           <LinearPriorityIcon priority={task.priority} />
         </span>
         {activeBlockers > 0 && (
-          <span className="blocked-by-count" title={`被 ${activeBlockers} 个未完成议题阻塞`}>
+          <span className="blocked-by-count" title={`被 ${activeBlockers} 个未完成任务阻塞`}>
             <LinearIcon name="alert" />
             {activeBlockers}
           </span>
         )}
         {subIssueTotal > 0 && (
-          <span className="sub-issue-progress-chip" title={`${completedSubIssues}/${subIssueTotal} 个子议题已完成`}>
+          <span className="sub-issue-progress-chip" title={`${completedSubIssues}/${subIssueTotal} 个子任务已完成`}>
             <span className="sub-issue-progress" aria-hidden="true" />
             {completedSubIssues}/{subIssueTotal}
           </span>

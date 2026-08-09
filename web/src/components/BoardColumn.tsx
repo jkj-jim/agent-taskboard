@@ -132,7 +132,7 @@ export function BoardColumn({
             <StatusIcon status={status} />
           </span>
           <h2 id={`column-${status}`}>{details.label}</h2>
-          <span className="task-count" aria-label={`${tasks.length} 个议题`}>{tasks.length}</span>
+          <span className="task-count" aria-label={`${tasks.length} 个任务`}>{tasks.length}</span>
         </div>
         <div className="column-actions">
           {tasks.length > 0 && (
@@ -147,7 +147,7 @@ export function BoardColumn({
             type="button"
             className="icon-button add-task-button"
             onClick={() => onCreate(status)}
-            aria-label={`在${details.label}中新建议题`}
+            aria-label={`在${details.label}中新建任务`}
             title={`添加到${details.label}`}
           >
             <LinearIcon name="plus" />

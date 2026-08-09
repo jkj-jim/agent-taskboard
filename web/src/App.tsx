@@ -376,7 +376,7 @@ function workspaceName(path?: string): string | null {
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
-  return "Something went wrong while loading your issues.";
+  return "Something went wrong while loading your tasks.";
 }
 
 function isAutomationHostItem(value: unknown): value is AutomationHostItem {
@@ -1418,8 +1418,8 @@ export function App() {
 
   function unavailableNativeCodexMessage(identifier: string): string {
     return isLocalTaskboardOrigin(window.location.origin)
-      ? `${identifier} 已更新。Codex 客户端未就绪，请在客户端中打开此议题。`
-      : `${identifier} 已更新。请回到运行 Codex 的电脑后，在客户端中打开此议题。`;
+      ? `${identifier} 已更新。Codex 客户端未就绪，请在客户端中打开此任务。`
+      : `${identifier} 已更新。请回到运行 Codex 的电脑后，在客户端中打开此任务。`;
   }
 
   async function autoLaunchCodex(
@@ -1623,7 +1623,7 @@ export function App() {
         candidate.id === previous.id ? previous : candidate,
       )));
       setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
-        ? "That issue changed elsewhere. The board has been refreshed."
+        ? "That task changed elsewhere. The board has been refreshed."
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
     } finally {
@@ -1693,7 +1693,7 @@ export function App() {
         candidate.id === previous.id ? previous : candidate,
       )));
       setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
-        ? "该议题已在其他位置更新，看板已重新同步。"
+        ? "该任务已在其他位置更新，看板已重新同步。"
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
       throw error;
@@ -1720,7 +1720,7 @@ export function App() {
       return result;
     } catch (error) {
       setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
-        ? "该议题已在其他位置更新，看板已重新同步。"
+        ? "该任务已在其他位置更新，看板已重新同步。"
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
       throw error;
@@ -1762,7 +1762,7 @@ export function App() {
       return true;
     } catch (error) {
       setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
-        ? "该议题已在其他位置更新，看板已重新同步。"
+        ? "该任务已在其他位置更新，看板已重新同步。"
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
       return false;
@@ -1813,12 +1813,12 @@ export function App() {
       ?? hostContext?.workspacePath;
     // The assignee decides which client picks the work up.
     const agentKind = agentByActorId(task.assignee.id)?.kind ?? "codex";
-    const prompt = `Use the manage-taskboard skill to address the issues mentioned in ${task.identifier}.`;
+    const prompt = `Use the manage-taskboard skill to address task ${task.identifier}.`;
 
     if (agentKind !== "codex") {
       const link = agentNewSessionLink(agentKind, { prompt, workspacePath });
       if (!link) {
-        setActionError(`无法在 ${agentLabel(agentKind)} 中开始这个议题。`);
+        setActionError(`无法在 ${agentLabel(agentKind)} 中开始这个任务。`);
         return;
       }
       window.location.assign(link);
@@ -1826,8 +1826,8 @@ export function App() {
     }
     if (taskboardMetadata?.capabilities?.nativeCodexTaskLaunch !== true) {
       setActionError(isLocalTaskboardOrigin(window.location.origin)
-        ? "Codex 客户端未就绪，请在客户端中打开此议题。"
-        : "请回到运行 Codex 的电脑后，在客户端中打开此议题。");
+        ? "Codex 客户端未就绪，请在客户端中打开此任务。"
+        : "请回到运行 Codex 的电脑后，在客户端中打开此任务。");
       return;
     }
     if (openingThreadTaskId) return;
@@ -1962,7 +1962,7 @@ export function App() {
               <span className="nav-glyph" aria-hidden="true">
                 <LinearIcon name="myIssues" />
               </span>
-              议题
+              任务
               <span className="nav-count">{tasks.length}</span>
             </button>
           </nav>
@@ -2010,8 +2010,8 @@ export function App() {
                 <button
                   className="detail-back-button"
                   type="button"
-                  aria-label="返回议题看板"
-                  title="返回议题看板 (Esc)"
+                  aria-label="返回任务看板"
+                  title="返回任务看板 (Esc)"
                   onClick={closeTaskDetail}
                 >
                   <LinearIcon name="chevronLeft" />
@@ -2129,8 +2129,8 @@ export function App() {
                 className="icon-button header-create-button"
                 type="button"
                 onClick={() => setEditor({ task: null, status: "backlog" })}
-                aria-label="新建议题"
-                title="新建议题 (C)"
+                aria-label="新建任务"
+                title="新建任务 (C)"
               >
                 <LinearIcon name="plus" />
               </button>
@@ -2149,7 +2149,7 @@ export function App() {
               aria-pressed={boardView === "issues"}
               onClick={() => selectBoardView("issues")}
             >
-              议题看板
+              任务看板
             </button>
             {SHOW_WORKFLOW_BOARD_ENTRY && (
               <button
@@ -2163,15 +2163,15 @@ export function App() {
             )}
           </div>
           {boardView === "issues" && <div className="toolbar-tools">
-            <label className={`search-field${search ? " has-value" : ""}`} title="搜索议题 (/)" >
+            <label className={`search-field${search ? " has-value" : ""}`} title="搜索任务 (/)" >
               <LinearIcon className="search-icon" name="search" />
-              <span className="sr-only">搜索议题</span>
+              <span className="sr-only">搜索任务</span>
               <input
                 id="task-search"
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="搜索议题…"
+                placeholder="搜索任务…"
               />
               {!search && <kbd>/</kbd>}
             </label>
@@ -2231,8 +2231,8 @@ export function App() {
             ) : projectChoices.length > 0 ? (
               <div className="project-home-groups">
                 {[
-                  { id: "with-issues", title: "已有议题", projects: projectsWithIssues },
-                  { id: "without-issues", title: "尚未添加议题", projects: projectsWithoutIssues },
+                  { id: "with-issues", title: "已有任务", projects: projectsWithIssues },
+                  { id: "without-issues", title: "尚未添加任务", projects: projectsWithoutIssues },
                 ].map((group) => (
                   <section className="project-home-group" key={group.id} aria-labelledby={`project-group-${group.id}`}>
                     <div className="project-group-heading">
@@ -2256,7 +2256,7 @@ export function App() {
                                 <strong>{project.name}</strong>
                                 <span>
                                   {project.inCodex ? "Codex 项目" : "已保存的项目"}
-                                  {project.issueCount > 0 ? ` · ${project.issueCount} 个议题` : ""}
+                                  {project.issueCount > 0 ? ` · ${project.issueCount} 个任务` : ""}
                                 </span>
                               </span>
                               {favoriteProjectIds.has(project.id) && <span className="project-card-favorite" aria-label="已收藏"><LinearIcon name="favorite" /></span>}
@@ -2338,7 +2338,7 @@ export function App() {
             />
           </Suspense>
         ) : tasksLoading && !hasLoadedTasks ? (
-          <div className="loading-board" aria-label="Loading issues" aria-busy="true">
+          <div className="loading-board" aria-label="Loading tasks" aria-busy="true">
             {TASK_STATUSES.map((status) => (
               <div className="loading-column" key={status}>
                 <span /><div /><div />
@@ -2346,12 +2346,12 @@ export function App() {
             ))}
           </div>
         ) : (
-          <div className="board-scroll" aria-label="Issue board">
+          <div className="board-scroll" aria-label="Task board">
             <div className="board">
               {filteredTasks.length === 0 && tasks.length > 0 && !showEmptyColumns && (
                 <section className="page-empty filter-empty board-filter-empty">
                   <span className="empty-search" aria-hidden="true"><LinearIcon name="search" /></span>
-                  <h2>没有匹配的议题</h2>
+                  <h2>没有匹配的任务</h2>
                   <p>请更换搜索词，或移除一个筛选条件。</p>
                   <button
                     className="button secondary"

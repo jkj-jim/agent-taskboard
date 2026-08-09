@@ -162,12 +162,12 @@ export function TaskEditor({
     event.preventDefault();
     const cleanTitle = title.trim();
     if (!cleanTitle) {
-      setError("请为议题填写一个简短、明确的标题。");
+      setError("请为任务填写一个简短、明确的标题。");
       titleRef.current?.focus();
       return;
     }
     if (recurrence && !dueDate) {
-      setError("重复议题需要先设置最早截止日期。");
+      setError("重复任务需要先设置最早截止日期。");
       return;
     }
 
@@ -194,9 +194,9 @@ export function TaskEditor({
       }, attachments, inlineMediaImages(descriptionSegments));
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "VERSION_CONFLICT") {
-        setError("这个议题已在其他位置发生变更，请关闭并刷新后重试。");
+        setError("这个任务已在其他位置发生变更，请关闭并刷新后重试。");
       } else {
-        setError(caught instanceof Error ? caught.message : "无法保存这个议题。");
+        setError(caught instanceof Error ? caught.message : "无法保存这个任务。");
       }
     } finally {
       setSaving(false);
@@ -238,7 +238,7 @@ export function TaskEditor({
       <form className="task-form" onSubmit={handleSubmit}>
         <header className="dialog-header">
           <div className="dialog-context">
-            <strong id="task-dialog-title">{task ? task.identifier : "新建议题"}</strong>
+            <strong id="task-dialog-title">{task ? task.identifier : "新建任务"}</strong>
           </div>
           <div className="dialog-header-actions">
             <button type="button" className="icon-button dialog-expand" aria-label={expanded ? "收起编辑器" : "展开编辑器"} onClick={() => setExpanded((current) => !current)}>
@@ -253,7 +253,7 @@ export function TaskEditor({
         <div className="form-body">
           <label className="composer-title">
             <span className="sr-only">标题</span>
-            <input ref={titleRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Issue title" maxLength={240} autoComplete="off" />
+            <input ref={titleRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Task title" maxLength={240} autoComplete="off" />
           </label>
           {task ? (
             <label className="composer-description">
@@ -402,7 +402,7 @@ export function TaskEditor({
             {task && <span aria-hidden="true" />}
             <div className="dialog-actions">
               {task && <span className="dialog-updated">编辑 {task.identifier}</span>}
-              <button className="button primary" type="submit" disabled={saving}>{saving ? "正在保存…" : task ? "保存更改" : "创建议题"}</button>
+              <button className="button primary" type="submit" disabled={saving}>{saving ? "正在保存…" : task ? "保存更改" : "创建任务"}</button>
             </div>
           </footer>
         </div>

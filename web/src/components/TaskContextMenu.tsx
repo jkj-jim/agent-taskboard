@@ -363,7 +363,7 @@ export function TaskContextMenu({
 
       <div className="context-menu-group">
         <MenuItem
-          label="编辑议题"
+          label="编辑任务"
           icon={<LinearIcon name="write" />}
           shortcut="↵"
           onPointerEnter={closeSubmenu}
@@ -385,8 +385,8 @@ export function TaskContextMenu({
         >
           {submenu === "copy" && (
             <div className="context-submenu" role="menu" data-submenu-panel="copy" style={{ "--submenu-shift": `${submenuShift}px` } as CSSProperties}>
-              <MenuItem label="复制议题 ID" onClick={() => closeThen(() => onCopy(task.identifier, `${task.identifier} 已复制。`))} />
-              <MenuItem label="复制标题" onClick={() => closeThen(() => onCopy(task.title, "议题标题已复制。"))} />
+              <MenuItem label="复制任务 ID" onClick={() => closeThen(() => onCopy(task.identifier, `${task.identifier} 已复制。`))} />
+              <MenuItem label="复制标题" onClick={() => closeThen(() => onCopy(task.title, "任务标题已复制。"))} />
               <MenuItem label="复制 Markdown" onClick={() => closeThen(() => onCopy(`**${task.identifier}** ${task.title}`, "Markdown 已复制。"))} />
             </div>
           )}
@@ -403,7 +403,7 @@ export function TaskContextMenu({
 
       <div className="context-menu-group">
         <MenuItem
-          label="归档议题"
+          label="归档任务"
           icon={<LinearIcon name="trash" />}
           shortcut="⌘⌫"
           danger

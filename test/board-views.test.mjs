@@ -19,14 +19,14 @@ const globalStyles = await readFile(new URL("../web/src/styles.css", import.meta
 test("the taskboard defaults to issues and exposes issue and node mode tabs", () => {
   assert.match(appSource, /type BoardView = "issues" \| "workflow"/);
   assert.match(appSource, /useState<BoardView>\("issues"\)/);
-  assert.match(appSource, />\s*议题看板\s*<\/button>/);
+  assert.match(appSource, />\s*任务看板\s*<\/button>/);
   assert.match(appSource, />\s*节点模式\s*<\/button>/);
   assert.match(appSource, /aria-pressed=\{boardView === "issues"\}/);
   assert.match(appSource, /aria-pressed=\{boardView === "workflow"\}/);
   assert.match(appSource, /onClick=\{\(\) => selectBoardView\("issues"\)\}/);
   assert.match(appSource, /onClick=\{\(\) => selectBoardView\("workflow"\)\}/);
   assert.match(appSource, /function changeProject[\s\S]*?setBoardView\("issues"\)/);
-  assert.doesNotMatch(appSource, /<span>活跃<\/span>|<span>积压事项<\/span>|所有议题|add-view/);
+  assert.doesNotMatch(appSource, /<span>活跃<\/span>|<span>积压事项<\/span>|所有任务|add-view/);
 });
 
 test("node mode lazy-loads WorkflowBoard while issue-only controls remain isolated", () => {
@@ -48,7 +48,7 @@ test("node mode lazy-loads WorkflowBoard while issue-only controls remain isolat
 
 test("the workflow catalog retains the real trigger, capability, API, integration, planning and result steps", () => {
   for (const label of [
-    "Issue",
+    "任务",
     "Skill",
     "MCP",
     "Nano Banana 生图",
@@ -182,7 +182,7 @@ test("workflow edits persist per project and continue to synchronize through the
 
 test("issue workflow choices read the shared service workspace without loading React Flow", () => {
   assert.match(workflowStoreSource, /INITIAL_WORKFLOW_ID = "issue-delivery"/);
-  assert.match(workflowStoreSource, /INITIAL_WORKFLOW_NAME = "议题处理与交付"/);
+  assert.match(workflowStoreSource, /INITIAL_WORKFLOW_NAME = "任务处理与交付"/);
   assert.match(workflowStoreSource, /export function workflowOptionsFromWorkspace\(workspace: unknown\)/);
   assert.match(appSource, /getWorkflowWorkspace<unknown>\(projectId, signal\)/);
   assert.match(appSource, /event\.type === "workflow\.updated"/);
@@ -207,8 +207,8 @@ test("the on-demand inspector exposes real capabilities and the existing node co
   assert.match(inspectorSource, /Claude Sonnet[\s\S]*?Claude Opus[\s\S]*?Claude Haiku/);
   assert.match(inspectorSource, /推理强度/);
   assert.match(inspectorSource, /规划要求/);
-  assert.match(inspectorSource, /议题选择/);
-  for (const action of ["改变状态", "添加评论", "添加标签", "设置优先级", "附加流程运行产物", "记录执行该议题的 Codex 对话"]) {
+  assert.match(inspectorSource, /任务选择/);
+  for (const action of ["改变状态", "添加评论", "添加标签", "设置优先级", "附加流程运行产物", "记录执行该任务的 Codex 对话"]) {
     assert.match(inspectorSource, new RegExp(action));
   }
   assert.match(inspectorSource, /额外说明/);
@@ -224,7 +224,7 @@ test("Git and issue configuration render the selected action in each step title"
   assert.match(inspectorSource, /aria-label="Git 远程仓库"/);
   assert.match(inspectorSource, /aria-label="Git Worktree 分支"/);
   assert.match(inspectorSource, /aria-label="Git Worktree 目录"/);
-  assert.match(inspectorSource, /aria-label="议题触发状态"/);
+  assert.match(inspectorSource, /aria-label="任务触发状态"/);
   assert.match(catalogSource, /function workflowNodeDisplayTitle[\s\S]*?data\.kind === "git"[\s\S]*?data\.kind === "issue-trigger"[\s\S]*?data\.kind === "issue-update"/);
   assert.match(workflowSource, /displayTitle: workflowNodeDisplayTitle\(node\.data\)/);
   assert.match(workflowNodeSource, /data\.displayTitle \?\? data\.title/);

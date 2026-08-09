@@ -420,10 +420,10 @@ export function createCodexTaskLaunchCoordinator({
       });
     }
     if (task.assignee?.type !== "agent" || task.assignee.id !== codexActorId) {
-      throw new ApiError(409, "CODEX_NOT_ASSIGNED", "This issue is not assigned to Codex");
+      throw new ApiError(409, "CODEX_NOT_ASSIGNED", "This task is not assigned to Codex");
     }
     if (input.trigger === "status-transition" && task.status !== "in_progress") {
-      throw new ApiError(409, "INVALID_AGENT_LAUNCH_STATE", "Codex auto-launch requires an in-progress issue");
+      throw new ApiError(409, "INVALID_AGENT_LAUNCH_STATE", "Codex auto-launch requires an in-progress task");
     }
 
     let pending = unboundByTask.get(task.id);
@@ -439,7 +439,7 @@ export function createCodexTaskLaunchCoordinator({
       }
       const created = await serializedCreate({
         workspacePath,
-        instruction: `e-taskboard Addressing the issues mentioned in ${task.identifier}`,
+        instruction: `e-taskboard Address task ${task.identifier}`,
         skillPath,
         presentation: input.presentation,
       });

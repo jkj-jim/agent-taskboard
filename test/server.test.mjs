@@ -108,7 +108,7 @@ test("workflow workspaces persist centrally with optimistic concurrency", async 
 
   const workspace = {
     version: 1,
-    tabs: [{ id: "issue-delivery", name: "议题处理与交付" }],
+    tabs: [{ id: "issue-delivery", name: "任务处理与交付" }],
     activeWorkflowId: "issue-delivery",
     snapshots: {
       "issue-delivery": {
@@ -687,7 +687,7 @@ test("workflow workspace changes are broadcast to other open clients", async () 
 
   const workspace = {
     version: 1,
-    tabs: [{ id: "issue-delivery", name: "议题处理与交付" }],
+    tabs: [{ id: "issue-delivery", name: "任务处理与交付" }],
     activeWorkflowId: "issue-delivery",
     snapshots: {
       "issue-delivery": { nodes: [], edges: [], selectedNodeId: null },

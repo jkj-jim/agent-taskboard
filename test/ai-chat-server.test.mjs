@@ -249,7 +249,7 @@ test("a user move into in progress is launched natively exactly once without cod
     assert.equal(fixture.nativeLaunches[0].workspacePath, fixture.workspace);
     assert.equal(
       fixture.nativeLaunches[0].instruction,
-      `e-taskboard Addressing the issues mentioned in ${created.body.task.identifier}`,
+      `e-taskboard Address task ${created.body.task.identifier}`,
     );
     assert.equal(fixture.nativeLaunches[0].presentation, "background");
 

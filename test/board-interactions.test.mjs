@@ -156,7 +156,7 @@ test("issues expose processing conversations without manual binding", () => {
 test("issue details provide a confirmed delete action that returns to the board", () => {
   assert.match(detailSource, /className="detail-delete-action"/);
   assert.match(detailSource, /setArchiveConfirmationOpen\(true\)/);
-  assert.match(detailSource, /id="delete-issue-title">删除这个议题？/);
+  assert.match(detailSource, /id="delete-issue-title">删除这个任务？/);
   assert.match(detailSource, /await onArchive\(currentTask\)/);
   assert.match(appSource, /async function archiveDetailTask[\s\S]*?if \(archived\) closeTaskDetail\(\)/);
   assert.match(appSource, /<TaskDetail[\s\S]*?onArchive=\{archiveDetailTask\}/);

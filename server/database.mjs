@@ -1122,7 +1122,7 @@ export class TaskboardDatabase {
     const dueDate = Object.hasOwn(changes, "dueDate") ? changes.dueDate : current.dueDate;
     const recurrence = Object.hasOwn(changes, "recurrence") ? changes.recurrence : current.recurrence;
     if (recurrence && !dueDate) {
-      throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires a due date");
+      throw new ApiError(400, "INVALID_FIELD", "A recurring task requires a due date");
     }
 
     const columns = {
@@ -1305,7 +1305,7 @@ export class TaskboardDatabase {
           WHERE relation_type = ? AND source_task_id = ? AND target_task_id = ?
         `).get(relationType, sourceTaskId, targetTaskId);
         if (existing) {
-          throw new ApiError(409, "RELATION_EXISTS", "This issue relation already exists");
+          throw new ApiError(409, "RELATION_EXISTS", "This task relation already exists");
         }
       }
 
@@ -1343,7 +1343,7 @@ export class TaskboardDatabase {
         WHERE relation_type = ? AND source_task_id = ? AND target_task_id = ?
       `).run(relationType, sourceTaskId, targetTaskId);
       if (removed.changes !== 1) {
-        throw new ApiError(404, "RELATION_NOT_FOUND", "This issue relation does not exist");
+        throw new ApiError(404, "RELATION_NOT_FOUND", "This task relation does not exist");
       }
       this.#touchTask(task.id, version, threadId);
       this.database.exec("COMMIT");
@@ -1555,10 +1555,10 @@ export class TaskboardDatabase {
 
   #validateRelationTasks(task, relatedTask) {
     if (task.id === relatedTask.id) {
-      throw new ApiError(400, "SELF_RELATION", "An issue cannot be related to itself");
+      throw new ApiError(400, "SELF_RELATION", "A task cannot be related to itself");
     }
     if (task.projectId !== relatedTask.projectId) {
-      throw new ApiError(400, "CROSS_PROJECT_RELATION", "Issue relations must stay within one project");
+      throw new ApiError(400, "CROSS_PROJECT_RELATION", "Task relations must stay within one project");
     }
   }
 
@@ -1636,7 +1636,7 @@ export class TaskboardDatabase {
         throw new ApiError(
           409,
           "AGENT_SESSION_CONFLICT",
-          "The issue was bound to another agent session",
+          "The task was bound to another agent session",
           { previousSessionId, currentSessionId },
         );
       }

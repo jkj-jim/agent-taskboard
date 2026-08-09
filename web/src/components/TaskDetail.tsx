@@ -394,7 +394,7 @@ export function TaskDetail({
     const normalized = title.trim();
     if (!normalized) {
       setTitle(currentTask.title);
-      onError("议题标题不能为空。");
+      onError("任务标题不能为空。");
       return;
     }
     if (normalized === currentTask.title) {
@@ -595,18 +595,18 @@ export function TaskDetail({
       : [];
 
   return (
-    <section className="issue-detail" aria-label={`${task.identifier} 议题详情`}>
+    <section className="issue-detail" aria-label={`${task.identifier} 任务详情`}>
       <div className="issue-detail-scroll">
         <div className="issue-detail-layout">
           <div className="issue-detail-main">
-            <article className="issue-editor" aria-label="议题内容">
+            <article className="issue-editor" aria-label="任务内容">
               <div className="issue-editor-content">
                 <textarea
                   ref={titleRef}
                   className="issue-title-input"
                   rows={1}
                   value={title}
-                  aria-label="议题标题"
+                  aria-label="任务标题"
                   disabled={savingProperty === "title"}
                   onChange={(event) => {
                     setTitle(event.target.value.replace(/\n/g, ""));
@@ -632,7 +632,7 @@ export function TaskDetail({
                     className="issue-description-input"
                     rows={1}
                     value={description}
-                    aria-label="议题描述"
+                    aria-label="任务描述"
                     placeholder="添加描述…"
                     disabled={savingProperty === "description"}
                     onChange={(event) => {
@@ -655,7 +655,7 @@ export function TaskDetail({
                     className={`issue-description-read${description ? "" : " empty"}`}
                     role="button"
                     tabIndex={0}
-                    aria-label="编辑议题描述"
+                    aria-label="编辑任务描述"
                     onClick={() => setEditingDescription(true)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
@@ -668,7 +668,7 @@ export function TaskDetail({
                   </div>
                 )}
                 {issueSessions.length > 0 && (
-                  <div className="issue-conversation-list" aria-label="处理此议题的对话">
+                  <div className="issue-conversation-list" aria-label="处理此任务的对话">
                     {issueSessions.map((session) => (
                       <ConversationLink
                         key={`${session.agentKind}:${session.sessionId}`}
@@ -788,7 +788,7 @@ export function TaskDetail({
                   <p>
                     <strong>{currentTask.creatorName}</strong>
                     <span className="actor-id">@{currentTask.creatorId}</span>
-                    创建了此议题
+                    创建了此任务
                     <time title={exactTime(currentTask.createdAt)}>{relativeTime(currentTask.createdAt)}</time>
                   </p>
                 </div>
@@ -997,7 +997,7 @@ export function TaskDetail({
             </section>
           </div>
 
-          <aside className="issue-properties" aria-label="议题属性">
+          <aside className="issue-properties" aria-label="任务属性">
             <button
               className="detail-open-thread-action"
               type="button"
@@ -1173,7 +1173,7 @@ export function TaskDetail({
               onClick={() => setArchiveConfirmationOpen(true)}
             >
               <LinearIcon name="trash" />
-              <span>删除议题</span>
+              <span>删除任务</span>
             </button>
           </aside>
         </div>
@@ -1214,11 +1214,11 @@ export function TaskDetail({
           if (event.target === event.currentTarget && !archiving) setArchiveConfirmationOpen(false);
         }}>
           <div className="delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-issue-title">
-            <h2 id="delete-issue-title">删除这个议题？</h2>
+            <h2 id="delete-issue-title">删除这个任务？</h2>
             <p>“{currentTask.identifier} {currentTask.title}” 将从看板中移除。</p>
             <div>
               <button className="button secondary" type="button" disabled={archiving} onClick={() => setArchiveConfirmationOpen(false)}>取消</button>
-              <button className="button danger" type="button" disabled={archiving} onClick={() => void confirmArchive()}>{archiving ? "删除中…" : "删除议题"}</button>
+              <button className="button danger" type="button" disabled={archiving} onClick={() => void confirmArchive()}>{archiving ? "删除中…" : "删除任务"}</button>
             </div>
           </div>
         </div>

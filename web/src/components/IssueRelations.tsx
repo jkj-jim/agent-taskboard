@@ -107,7 +107,7 @@ function IssuePicker({
               aria-expanded="true"
               aria-controls="issue-relation-results"
               aria-activedescendant={results[activeIndex] ? `relation-option-${results[activeIndex].id}` : undefined}
-              placeholder="搜索议题…"
+              placeholder="搜索任务…"
               onChange={(event) => {
                 setQuery(event.target.value);
                 setActiveIndex(0);
@@ -147,7 +147,7 @@ function IssuePicker({
                 <span className="issue-relation-option-title">{candidate.title}</span>
               </button>
             )) : (
-              <p className="issue-relation-empty">没有匹配的议题</p>
+              <p className="issue-relation-empty">没有匹配的任务</p>
             )}
           </div>
         </div>
@@ -225,7 +225,7 @@ export function IssueParentLink({
     <div className={`issue-parent-link${parent ? " has-parent" : ""}`}>
       {parent && (
         <>
-          <span className="issue-parent-prefix">子议题属于</span>
+          <span className="issue-parent-prefix">子任务属于</span>
           <IssueRelationRow
             issue={parent}
             removing={saving}
@@ -240,7 +240,7 @@ export function IssueParentLink({
         </>
       )}
       <IssuePicker
-        label={parent ? "更换父议题" : "设置父议题"}
+        label={parent ? "更换父任务" : "设置父任务"}
         candidates={candidates}
         disabled={saving}
         onSelect={async (candidate) => {
@@ -285,7 +285,7 @@ export function IssueSubIssues({
     <section className="issue-sub-issues" aria-labelledby="sub-issues-heading">
       <header>
         <div>
-          <h2 id="sub-issues-heading">子议题</h2>
+          <h2 id="sub-issues-heading">子任务</h2>
           {subIssues.length > 0 && (
             <span className="sub-issue-summary">
               <span
@@ -298,7 +298,7 @@ export function IssueSubIssues({
           )}
         </div>
         <IssuePicker
-          label="添加子议题"
+          label="添加子任务"
           candidates={candidates}
           disabled={savingId !== null}
           onSelect={async (candidate) => {
@@ -341,7 +341,7 @@ export function IssueSubIssues({
 const RELATION_GROUPS = [
   { type: "blocked_by", field: "blockedBy", label: "阻塞于", tone: "blocked-by" },
   { type: "blocks", field: "blocks", label: "阻塞", tone: "blocks" },
-  { type: "related", field: "related", label: "相关议题", tone: "related" },
+  { type: "related", field: "related", label: "相关任务", tone: "related" },
 ] as const;
 
 export function IssueRelationSidebar({

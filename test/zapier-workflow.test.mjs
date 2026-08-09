@@ -277,7 +277,7 @@ test("Feishu message keeps Feishu docs and configures exactly one real delivery 
 test("add ISSUE is a separate result step beside issue update", () => {
   assert.match(
     catalog,
-    /group: "结果",[\s\S]*?title: "添加 ISSUE"[\s\S]*?kind: "issue-create"[\s\S]*?title: "添加 ISSUE"[\s\S]*?icon: "createIssue"/,
+    /group: "结果",[\s\S]*?title: "添加任务"[\s\S]*?kind: "issue-create"[\s\S]*?title: "添加任务"[\s\S]*?icon: "createIssue"/,
   );
   assert.match(catalog, /kind: "issue-update"/);
   assert.match(picker, /onSelect\(item\)/);
@@ -307,11 +307,11 @@ test("add ISSUE keeps shared inspector settings and limits its configuration to 
   const createIssueInspector = inspector.match(
     /data\.kind === "issue-create" && \([\s\S]*?\n          \)\}/,
   )?.[0] ?? "";
-  assert.match(createIssueInspector, /aria-label="ISSUE 标题"/);
-  assert.match(createIssueInspector, /aria-label="ISSUE 描述"/);
-  assert.match(createIssueInspector, /aria-label="ISSUE 初始状态"[\s\S]*?ISSUE_STATUSES\.map/);
-  assert.match(createIssueInspector, /aria-label="ISSUE 优先级"[\s\S]*?ISSUE_PRIORITIES\.map/);
-  assert.match(createIssueInspector, /aria-label="ISSUE 标签"/);
+  assert.match(createIssueInspector, /aria-label="任务标题"/);
+  assert.match(createIssueInspector, /aria-label="任务描述"/);
+  assert.match(createIssueInspector, /aria-label="任务初始状态"[\s\S]*?ISSUE_STATUSES\.map/);
+  assert.match(createIssueInspector, /aria-label="任务优先级"[\s\S]*?ISSUE_PRIORITIES\.map/);
+  assert.match(createIssueInspector, /aria-label="任务标签"/);
   assert.doesNotMatch(createIssueInspector, /当前项目|projectName|property-project/);
 });
 

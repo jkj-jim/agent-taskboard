@@ -273,7 +273,7 @@ function initialNodes(): WorkflowCanvasNode[] {
       position: { x: 0, y: 48 },
       data: {
         ...paletteData("issue-trigger"),
-        title: "议题触发器",
+        title: "任务触发器",
         description: "状态变为「待办事项」时触发",
         meta: "任意优先级 · 任意标签",
       },
@@ -284,7 +284,7 @@ function initialNodes(): WorkflowCanvasNode[] {
       position: { x: 0, y: 184 },
       data: {
         ...paletteData("basic-planning"),
-        title: "拆解议题执行计划",
+        title: "拆解任务执行计划",
         description: "生成步骤、依赖和验收条件",
         meta: "基础规划 · 当前项目",
       },
@@ -321,7 +321,7 @@ function initialNodes(): WorkflowCanvasNode[] {
       data: {
         ...paletteData("nano-banana"),
         title: "生成预览素材",
-        description: "根据议题内容生成预览图",
+        description: "根据任务内容生成预览图",
         meta: "Nano Banana · 16:9",
       },
     },

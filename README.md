@@ -1,8 +1,8 @@
 # Codex Taskboard
 
-一个本地优先的议题看板，可在浏览器中运行，也可以通过独立 CDP 启动器或注入脚本嵌入 Codex。React UI 与捆绑的 Skill 所使用的 `taskctl` CLI 共用同一套 HTTP API。
+一个本地优先的任务看板，可在浏览器中运行，也可以通过独立 CDP 启动器或注入脚本嵌入 Codex。React UI 与捆绑的 Skill 所使用的 `taskctl` CLI 共用同一套 HTTP API。
 
-看板同时支持 **Codex** 和 **Claude Code** 两个 Agent：议题的负责人可以选 Codex Agent 或 Claude Agent，选谁就由谁承接后续开发。两者的差异集中在 [`shared/agents.mjs`](shared/agents.mjs)（唯一事实源）与 [`server/agents/`](server/agents/)（每个 Agent 一个适配器）两处，其余代码一律查表，不判断 Agent 名字。
+看板同时支持 **Codex** 和 **Claude Code** 两个 Agent：任务的负责人可以选 Codex Agent 或 Claude Agent，选谁就由谁承接后续开发。两者的差异集中在 [`shared/agents.mjs`](shared/agents.mjs)（唯一事实源）与 [`server/agents/`](server/agents/)（每个 Agent 一个适配器）两处，其余代码一律查表，不判断 Agent 名字。
 
 ## 环境要求
 
@@ -60,7 +60,7 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
   ~/.claude/skills/manage-taskboard
 ```
 
-该 Skill 会指导 Agent 检查议题、将其移至 `in_progress`、使用乐观版本控制、验证工作，然后移至 `in_review`；只有在用户明确确认验收或要求标记完成后，才会将议题移至 `done`。Skill 内的 `agents/openai.yaml` 只对 Codex 生效，Claude Code 会忽略它、只读 `SKILL.md` 的 frontmatter。
+该 Skill 会指导 Agent 检查任务、将其移至 `in_progress`、使用乐观版本控制、验证工作，然后移至 `in_review`；只有在用户明确确认验收或要求标记完成后，才会将任务移至 `done`。Skill 内的 `agents/openai.yaml` 只对 Codex 生效，Claude Code 会忽略它、只读 `SKILL.md` 的 frontmatter。
 
 ## 配合 Claude Code 使用
 
@@ -87,15 +87,15 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 ### 三种用法
 
-**自动启动 Agent。** 本机通过 `localhost` / `127.0.0.1` 打开的看板中，用户把 Codex Agent 负责的议题移入“进行中”，或在“进行中”改派给 Codex Agent 时，本地服务会在已经运行且挂载兼容注入器的 Codex 客户端中后台创建并提交原生任务。它不会启动或激活 Codex 应用，不会改变浏览器焦点，也不会降级为 `codex exec`；客户端或注入器未就绪时只保留议题状态并提示。Claude Agent 仍由看板现有的 CLI 适配器自动启动。
+**自动启动 Agent。** 本机通过 `localhost` / `127.0.0.1` 打开的看板中，用户把 Codex Agent 负责的任务移入“进行中”，或在“进行中”改派给 Codex Agent 时，本地服务会在已经运行且挂载兼容注入器的 Codex 客户端中后台创建并提交原生任务。它不会启动或激活 Codex 应用，不会改变浏览器焦点，也不会降级为 `codex exec`；客户端或注入器未就绪时只保留任务状态并提示。Claude Agent 仍由看板现有的 CLI 适配器自动启动。
 
 **在对话中打开。** Codex Agent 会通过同一个本机桥创建原生 Codex 任务并写回真实任务 ID：嵌入看板会停留在新任务，同机普通浏览器会在创建成功后通过 `codex://` 将客户端路由到它。是否把已经运行的 Codex 窗口提到最前由客户端当前版本决定；Taskboard 不调用系统窗口激活接口。Claude Agent 继续走 `claude://code/new`，并把工作目录和预填指令一起带过去。远程 Cloud 页面不能直接控制桌面客户端，需要回到运行 Codex 的电脑操作。
 
-**在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此议题一开始就能关联和跳转。
+**在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此任务一开始就能关联和跳转。
 
-**关联并唤起已有会话。** 议题详情下方列出该议题每个 Agent 的当前会话，点击即可在对应客户端中打开（Claude 走 `claude://resume?session=<id>`，会把该 CLI 会话导入桌面端）。旁边的「关联已有会话…」下拉列出该项目目录下的所有 Claude Code 会话（活跃的带 ●），可以把你自己开的会话挂到议题上。
+**关联并唤起已有会话。** 任务详情下方列出该任务每个 Agent 的当前会话，点击即可在对应客户端中打开（Claude 走 `claude://resume?session=<id>`，会把该 CLI 会话导入桌面端）。旁边的「关联已有会话…」下拉列出该项目目录下的所有 Claude Code 会话（活跃的带 ●），可以把你自己开的会话挂到任务上。
 
-会话归属是自动的：Agent 通过 `taskctl` 写议题或评论时，`taskctl` 读取 `CODEX_THREAD_ID` 或 `CLAUDE_CODE_SESSION_ID` 判断自己是谁，看板据此为每个议题保留**每个 Agent 各一条**当前会话。
+会话归属是自动的：Agent 通过 `taskctl` 写任务或评论时，`taskctl` 读取 `CODEX_THREAD_ID` 或 `CLAUDE_CODE_SESSION_ID` 判断自己是谁，看板据此为每个任务保留**每个 Agent 各一条**当前会话。
 
 ### 注意事项
 
@@ -149,7 +149,7 @@ npm run codex:inject -- --port 9229 --open
 
 脚本会在 Codex 侧边栏中添加 Taskboard 入口，并让 iframe 覆盖 Codex 的完整主工作区，包括上下文标题栏区域，因此 Taskboard 自身的页头不会留下空白条带。完整的矩形页头位于 Electron 可拖拽层上方，并标记为 `no-drag`；由于激活 Taskboard 时会隐藏原生上下文操作，其自身操作可以使用正常的边缘内距，无需人为留出右侧空隙。原生侧边栏会保持挂载，之前选择的页面和上下文页头会暂时隐藏；选择其他 Codex 页面即可恢复。
 
-Codex 原生启动由本地 Taskboard 服务串行执行：服务连接已经运行且保有注入器心跳的客户端，切换议题对应的项目或 worktree，退出意外激活的 Plan mode，插入真实的 `$manage-taskboard` Skill mention 和议题指令，校验后提交，并把新生成的原生任务 ID 以 compare-and-set 方式写回议题。后台启动会恢复此前的 Codex 任务和 Taskboard；用户主动点击“在对话中打开”时才停留或跳转到新任务。浏览器只访问 loopback Taskboard API，不接触 CDP 端口；整个流程不会调用系统窗口激活接口，也不会启动第二个 app-server 或 `codex exec`。每个议题仍只能绑定一个 Git 分支或一个 worktree，可选项从所选 Codex 项目的仓库中扫描。
+Codex 原生启动由本地 Taskboard 服务串行执行：服务连接已经运行且保有注入器心跳的客户端，切换任务对应的项目或 worktree，退出意外激活的 Plan mode，插入真实的 `$manage-taskboard` Skill mention 和任务指令，校验后提交，并把新生成的原生任务 ID 以 compare-and-set 方式写回任务。后台启动会恢复此前的 Codex 任务和 Taskboard；用户主动点击“在对话中打开”时才停留或跳转到新任务。浏览器只访问 loopback Taskboard API，不接触 CDP 端口；整个流程不会调用系统窗口激活接口，也不会启动第二个 app-server 或 `codex exec`。每个任务仍只能绑定一个 Git 分支或一个 worktree，可选项从所选 Codex 项目的仓库中扫描。
 
 如需使用其他 UI 源地址，请在用户脚本运行前设置 `window.__CODEX_TASKBOARD_URL__`。
 

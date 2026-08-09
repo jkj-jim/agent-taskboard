@@ -610,10 +610,10 @@ export function TaskFilterMenu({ tasks, search, labels, filters, onChange }: Tas
         ref={triggerRef}
         type="button"
         className={`task-filter-trigger${activeCount ? " is-active" : ""}${open ? " is-open" : ""}`}
-        aria-label={activeCount ? `筛选议题，已启用 ${activeCount} 个条件` : "筛选议题"}
+        aria-label={activeCount ? `筛选任务，已启用 ${activeCount} 个条件` : "筛选任务"}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={activeCount ? `已启用 ${activeCount} 个筛选条件 (F)` : "筛选议题 (F)"}
+        title={activeCount ? `已启用 ${activeCount} 个筛选条件 (F)` : "筛选任务 (F)"}
         onClick={() => open ? closeMenu() : openMenu()}
       >
         <LinearIcon name="filter" className="filter-icon" />

@@ -687,7 +687,7 @@ function parseTaskCreate(body) {
     recurrence: parseRecurrence(body.recurrence ?? null),
   };
   if (task.recurrence && !task.dueDate) {
-    throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
+    throw new ApiError(400, "INVALID_FIELD", "A recurring task requires 'dueDate'");
   }
   return task;
 }
@@ -712,7 +712,7 @@ function parseTaskPatch(body) {
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
   if (changes.recurrence && body.dueDate === null) {
-    throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
+    throw new ApiError(400, "INVALID_FIELD", "A recurring task requires 'dueDate'");
   }
   if (Object.keys(changes).length === 0 && assigneeTarget === undefined) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one task field");
@@ -1568,7 +1568,7 @@ export function createTaskboardServer(options = {}) {
         agentKind: agent.id,
       });
       const run = await aiChat.startTurn(thread.id, {
-        message: `Address the issues mentioned in ${task.identifier}.`,
+        message: `Address task ${task.identifier}.`,
       });
       return {
         status: "started",
@@ -2013,7 +2013,7 @@ export function createTaskboardServer(options = {}) {
           type = decodeURIComponent(taskRelationRoute[2]);
           relatedTaskId = decodeURIComponent(taskRelationRoute[3]);
         } catch {
-          throw new ApiError(400, "INVALID_PATH", "Issue relation path contains invalid encoding");
+          throw new ApiError(400, "INVALID_PATH", "Task relation path contains invalid encoding");
         }
         if (
           taskId.length === 0
@@ -2021,10 +2021,10 @@ export function createTaskboardServer(options = {}) {
           || relatedTaskId.length === 0
           || relatedTaskId.length > 128
         ) {
-          throw new ApiError(400, "INVALID_PATH", "Issue relation task id is invalid");
+          throw new ApiError(400, "INVALID_PATH", "Task relation task id is invalid");
         }
         if ([...url.searchParams.keys()].length > 0) {
-          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Issue relation routes do not accept query parameters");
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Task relation routes do not accept query parameters");
         }
         const relationType = parseIssueRelationType(type);
         if (request.method === "POST") {

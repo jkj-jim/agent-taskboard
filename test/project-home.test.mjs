@@ -47,8 +47,8 @@ test("project selection is remembered until the user explicitly returns home", (
 
 test("the home uses the same restrained surface language as the issue board", () => {
   assert.match(appSource, /<section className="project-home">/);
-  assert.match(appSource, /title: "已有议题", projects: projectsWithIssues/);
-  assert.match(appSource, /title: "尚未添加议题", projects: projectsWithoutIssues/);
+  assert.match(appSource, /title: "已有任务", projects: projectsWithIssues/);
+  assert.match(appSource, /title: "尚未添加任务", projects: projectsWithoutIssues/);
   assert.match(appSource, /project\.issueCount > 0/);
   assert.match(styles, /\.project-grid \{[\s\S]*?grid-template-columns:/);
   assert.match(styles, /\.project-card \{[\s\S]*?border: var\(--border-hairline\)/);
@@ -98,7 +98,7 @@ test("the project breadcrumb stops at the project name", () => {
     /className="detail-back-button project-home-button"[\s\S]*?<span>首页<\/span>[\s\S]*?selectedProjectId && <span className="breadcrumb-chevron"[\s\S]*?className="header-project-switcher"/,
   );
   assert.doesNotMatch(appSource, /className="issue-root-button"/);
-  assert.doesNotMatch(appSource, /detailTask\?\.identifier \?\? "议题"/);
+  assert.doesNotMatch(appSource, /detailTask\?\.identifier \?\? "任务"/);
 });
 
 test("the collapsed Codex sidebar can be expanded immediately left of Home", () => {
