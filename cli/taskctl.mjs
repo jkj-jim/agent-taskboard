@@ -20,10 +20,12 @@ import {
   isTaskStatus,
 } from "../shared/domain.mjs";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const DEFAULT_API_URL = "http://127.0.0.1:47823";
 
-const BOOLEAN_OPTIONS = new Set(["json"]);
+const BOOLEAN_OPTIONS = new Set(["json", "all-statuses", "full"]);
+const TERMINAL_TASK_STATUSES = new Set(["done", "canceled"]);
+const ISSUE_LIST_DESCRIPTION_PREVIEW_LENGTH = 50;
 
 const COMMAND_OPTIONS = new Map([
   ["project list", new Set(["json"])],
@@ -32,8 +34,9 @@ const COMMAND_OPTIONS = new Map([
   ["cloud login", new Set(["url", "actor-name", "json"])],
   ["cloud status", new Set(["json"])],
   ["cloud logout", new Set(["json"])],
-  ["issue list", new Set(["project", "status", "json"])],
+  ["issue list", new Set(["project", "status", "all-statuses", "full", "json"])],
   ["issue get", new Set(["json"])],
+  ["issue brief", new Set(["json"])],
   [
     "issue create",
     new Set([
@@ -186,7 +189,7 @@ async function execute(parsed, overrides) {
   const allowedOptions = COMMAND_OPTIONS.get(command);
   if (!allowedOptions) {
     throw usageError(
-      "Expected one of: project list/create/map, cloud login/status/logout, issue list/get/create/update/move/archive/restore/relation, comment list/add/update/delete, attachment download, context current",
+      "Expected one of: project list/create/map, cloud login/status/logout, issue list/get/brief/create/update/move/archive/restore/relation, comment list/add/update/delete, attachment download, context current",
     );
   }
   validateOptions(parsed.options, allowedOptions);
@@ -247,6 +250,9 @@ async function execute(parsed, overrides) {
     case "issue get":
       expectOperandCount(parsed, 1);
       return api.request("GET", taskPath(parsed.operands[0]));
+    case "issue brief":
+      expectOperandCount(parsed, 1);
+      return issueBrief(api, parsed.operands[0]);
     case "issue create":
       expectOperandCount(parsed, 0);
       return createIssue(api, parsed.options, overrides);
@@ -488,11 +494,133 @@ async function listIssues(api, options) {
   if (options.status !== undefined) {
     assertStatus(options.status);
   }
+  if (options.status !== undefined && options["all-statuses"]) {
+    throw usageError("--status and --all-statuses cannot be used together");
+  }
   const search = new URLSearchParams();
   if (options.project !== undefined) search.set("projectId", options.project);
   if (options.status !== undefined) search.set("status", options.status);
   const query = search.size > 0 ? `?${search}` : "";
-  return api.request("GET", `/api/tasks${query}`);
+  const response = await api.request("GET", `/api/tasks${query}`);
+  const tasks = Array.isArray(response.tasks) ? response.tasks : [];
+  const selectedTasks = options.status === undefined && !options["all-statuses"]
+    ? tasks.filter((task) => !TERMINAL_TASK_STATUSES.has(task.status))
+    : tasks;
+  return {
+    ...response,
+    tasks: options.full ? selectedTasks : selectedTasks.map(issueListSummary),
+  };
+}
+
+function issueListSummary(task) {
+  const description = normalizeDescriptionPreviewSource(task.description);
+  const characters = Array.from(description);
+  return {
+    identifier: task.identifier,
+    title: task.title,
+    descriptionPreview: characters.slice(0, ISSUE_LIST_DESCRIPTION_PREVIEW_LENGTH).join(""),
+    descriptionTruncated: characters.length > ISSUE_LIST_DESCRIPTION_PREVIEW_LENGTH,
+    status: task.status,
+    priority: task.priority,
+    labels: Array.isArray(task.labels) ? task.labels : [],
+    assignee: task.assignee
+      ? {
+          type: task.assignee.type,
+          id: task.assignee.id,
+          name: task.assignee.name,
+        }
+      : null,
+    version: task.version,
+  };
+}
+
+function normalizeDescriptionPreviewSource(description) {
+  return typeof description === "string" ? description.replace(/\s+/gu, " ").trim() : "";
+}
+
+async function issueBrief(api, taskId) {
+  const basePath = taskPath(taskId);
+  const [taskResponse, commentResponse, attachmentResponse] = await Promise.all([
+    api.request("GET", basePath),
+    api.request("GET", `${basePath}/comments`),
+    api.request("GET", `${basePath}/attachments`),
+  ]);
+  const comments = Array.isArray(commentResponse.comments) ? commentResponse.comments : [];
+  const attachments = Array.isArray(attachmentResponse.attachments)
+    ? attachmentResponse.attachments
+    : [];
+  return {
+    task: briefTask(taskResponse.task),
+    comments: comments.map(briefComment),
+    ...(attachments.length > 0 ? { attachments: attachments.map(briefAttachment) } : {}),
+  };
+}
+
+function briefTask(task) {
+  return {
+    identifier: task.identifier,
+    projectId: task.projectId,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    labels: task.labels,
+    version: task.version,
+    assignee: task.assignee
+      ? {
+          type: task.assignee.type,
+          id: task.assignee.id,
+          name: task.assignee.name,
+        }
+      : null,
+    developmentContext: task.developmentContext,
+    relations: briefRelations(task.relations),
+    ...nonNullField("dueDate", task.dueDate),
+    ...nonNullField("recurrence", task.recurrence),
+    ...nonNullField("workflowId", task.workflowId),
+    ...nonNullField("archivedAt", task.archivedAt),
+  };
+}
+
+function briefRelations(relations = {}) {
+  const summarize = (task) => ({
+    identifier: task.identifier,
+    title: task.title,
+    status: task.status,
+  });
+  return {
+    parent: relations.parent ? summarize(relations.parent) : null,
+    subIssues: Array.isArray(relations.subIssues) ? relations.subIssues.map(summarize) : [],
+    blockedBy: Array.isArray(relations.blockedBy) ? relations.blockedBy.map(summarize) : [],
+    blocks: Array.isArray(relations.blocks) ? relations.blocks.map(summarize) : [],
+    related: Array.isArray(relations.related) ? relations.related.map(summarize) : [],
+  };
+}
+
+function briefComment(comment) {
+  const attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
+  return {
+    id: comment.id,
+    version: comment.version,
+    authorType: comment.authorType,
+    authorName: comment.authorName,
+    createdAt: comment.createdAt,
+    body: comment.body,
+    ...(attachments.length > 0 ? { attachments: attachments.map(briefAttachment) } : {}),
+  };
+}
+
+function briefAttachment(attachment) {
+  return {
+    id: attachment.id,
+    filename: attachment.filename,
+    contentType: attachment.contentType,
+    size: attachment.size,
+  };
+}
+
+function nonNullField(name, value) {
+  return value === null || value === undefined ? {} : { [name]: value };
 }
 
 async function createIssue(api, options, overrides) {

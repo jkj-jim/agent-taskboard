@@ -29,14 +29,25 @@ taskctl cloud logout [--json]
 
 Every issue or comment write must be attributed to an agent conversation. `taskctl` reads `CODEX_THREAD_ID` inside Codex and `CLAUDE_CODE_SESSION_ID` inside Claude Code. Outside both, pass `--thread-id ID` explicitly. Use `--agent codex|claude` only to override the agent detected from the environment. An explicit option takes precedence over the environment. Read commands do not require a conversation id.
 
-Every successful command writes one JSON object with `schemaVersion` to stdout. The current schema version is `2`. Errors write one JSON object to stderr. Exit codes are `0` for success, `2` for invalid input, `3` when the service is unavailable, `4` for API or response errors, and `5` for conflicts.
+Every successful command writes one JSON object with `schemaVersion` to stdout. The current schema version is `3`. Errors write one JSON object to stderr. Exit codes are `0` for success, `2` for invalid input, `3` when the service is unavailable, `4` for API or response errors, and `5` for conflicts.
 
 ## Read issues
 
 ```bash
-taskctl issue list [--project PROJECT_ID] [--status STATUS] [--json]
+taskctl issue list \
+  [--project PROJECT_ID] \
+  [--status STATUS | --all-statuses] \
+  [--full] \
+  [--json]
 taskctl issue get ID [--json]
+taskctl issue brief ID [--json]
 ```
+
+By default, `issue list` is a candidate-task index rather than a bulk export. It omits `done` and `canceled` tasks and returns only `identifier`, `title`, `descriptionPreview`, `descriptionTruncated`, `status`, `priority`, `labels`, the assignee's `type`/`id`/`name`, and `version`. The preview collapses whitespace and contains at most 50 Unicode code points. Use the index to select a candidate, then use `issue brief` before executing or changing it.
+
+An explicit `--status done` or `--status canceled` retrieves that terminal status. `--all-statuses` includes every non-archived status. `--full` restores the complete server task objects for the selected status scope; reserve `--all-statuses --full` for statistics, export, and diagnosis. `--status` and `--all-statuses` cannot be combined.
+
+`issue brief` fetches the issue, all comments, and task attachments in one command. It keeps the fields needed to execute or hand off work while omitting display-only metadata. Prefer it at the start of an execution round; use `issue get` or `comment list` separately only when a later write needs the latest issue or comment version.
 
 ## Create issues
 
@@ -86,7 +97,7 @@ taskctl issue archive ID [--thread-id ID] [--if-version N] [--json]
 taskctl issue restore ID [--thread-id ID] [--if-version N] [--json]
 ```
 
-Use `issue move` to set `in_progress` before implementation and `in_review` after implementation and self-verification. The agent must not move work directly from `in_progress` to `done`; use `done` only after the user explicitly confirms acceptance or explicitly asks to mark the issue complete. Use `blocked` when work cannot continue and `canceled` when it will not continue. On a version conflict, fetch the issue again and reconcile before retrying.
+The agent must not move work directly from `in_progress` to `done`; use `done` only after the user explicitly confirms acceptance or explicitly asks to mark the issue complete. Use `blocked` when work cannot continue and `canceled` when it will not continue. On a version conflict, fetch the issue again and reconcile before retrying.
 
 Use either `--git-branch` or `--worktree-path`/`--worktree-branch`; an issue has only one development context. Issue JSON stores it as `developmentContext`, either `{ "type": "branch", "branch": "..." }` or `{ "type": "worktree", "path": "...", "branch": "..." }`. Its singular `threadId` is the agent conversation that most recently created or changed the issue itself. Recurrence requires a due date.
 

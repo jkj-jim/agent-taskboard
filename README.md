@@ -4,6 +4,8 @@
 
 看板同时支持 **Codex** 和 **Claude Code** 两个 Agent：任务的负责人可以选 Codex Agent 或 Claude Agent，选谁就由谁承接后续开发。两者的差异集中在 [`shared/agents.mjs`](shared/agents.mjs)（唯一事实源）与 [`server/agents/`](server/agents/)（每个 Agent 一个适配器）两处，其余代码一律查表，不判断 Agent 名字。
 
+想快速理解“用户派发任务 → Agent 读取与执行 → 评论交付 → 用户验收”的完整逻辑，请看[《Agent 任务运行机制》](document/agent-task-interaction-mechanism.md)。
+
 ## 环境要求
 
 - Node.js 22.5 或更高版本
@@ -83,7 +85,9 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 3. **按上一节把 Skill 软链到 `~/.claude/skills/`。**
 
-`taskctl` 不需要 `npm link`：服务会在 `.data/bin/` 下生成一个 shim 并拼进 Agent 子进程的 `PATH`，同时注入 `CODEX_TASKBOARD_URL` 指向自己，Agent 直接 `taskctl issue get ABC-1 --json` 即可。
+`taskctl` 不需要 `npm link`：服务会在 `.data/bin/` 下生成一个带当前服务地址的 shim，并拼进 Agent 子进程的 `PATH`。Agent 开工时可直接用 `taskctl issue brief ABC-1 --json` 一次读取任务、全部评论与附件；原生 Codex 唤起指令会使用这个 shim 的绝对路径，非默认端口也不会连错服务。
+
+`taskctl issue list --project <id> --json` 默认是供 Agent 选候选任务的精简索引：只列活动状态，描述最多返回 50 个字符。明确查看历史时用 `--status done`；统计、导出或诊断才使用 `--all-statuses --full`。选中任务后用 `issue brief` 读取完整执行上下文。
 
 ### 三种用法
 

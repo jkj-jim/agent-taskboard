@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { ApiError } from "./database.mjs";
 import { DEFAULT_AGENT_KIND, spawnAgentTurn } from "./agents/index.mjs";
-import { ensureTaskctlBin, withTaskctlOnPath } from "./agents/taskctl-bin.mjs";
 
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const ERROR_CONTENT_LIMIT = 65_536;
@@ -44,15 +43,9 @@ export class AiChatService {
     this.database = options.database;
     this.agents = options.agents;
     this.manageTaskboardSkillPath = options.manageTaskboardSkillPath;
-    // Agents reach the board through `taskctl`, so hand them this server's own
-    // origin instead of letting the CLI fall back to its compiled-in default.
-    this.processEnv = options.taskboardUrl
-      ? { ...(options.processEnv ?? process.env), CODEX_TASKBOARD_URL: options.taskboardUrl }
-      : options.processEnv ?? process.env;
-    this.taskctlBinDirectory = options.taskctlBinDirectory ?? null;
-    this.taskctlCliPath = options.taskctlCliPath ?? null;
+    this.processEnv = options.processEnv ?? process.env;
+    this.taskctlRuntime = options.taskctlRuntime ?? null;
     this.onIssueSession = options.onIssueSession ?? null;
-    this.taskctlBinReady = null;
     this.killGraceMs = options.killGraceMs ?? 1_000;
     this.active = new Map();
     this.listeners = new Map();
@@ -111,12 +104,9 @@ export class AiChatService {
 
   /** The environment an agent turn runs in, with `taskctl` on its PATH. */
   async #turnEnv() {
-    if (!this.taskctlBinDirectory || !this.taskctlCliPath) return this.processEnv;
-    this.taskctlBinReady ??= ensureTaskctlBin({
-      binDirectory: this.taskctlBinDirectory,
-      cliPath: this.taskctlCliPath,
-    });
-    return withTaskctlOnPath(this.processEnv, await this.taskctlBinReady);
+    return this.taskctlRuntime
+      ? this.taskctlRuntime.environment(this.processEnv)
+      : this.processEnv;
   }
 
   async createThread(input) {

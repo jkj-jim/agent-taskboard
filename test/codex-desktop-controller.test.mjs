@@ -67,6 +67,7 @@ test("native task creation is process-serialized across different issues", async
     },
     loadTask: (id) => tasks.get(id),
     resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => "/tmp/taskboard/bin/taskctl",
     bindSession: async (binding) => ({
       ...tasks.get(binding.taskId),
       version: 2,
@@ -104,6 +105,7 @@ test("a failed writeback retries the cached native task without creating a dupli
     },
     loadTask: async () => current,
     resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => "/tmp/taskboard/bin/taskctl",
     bindSession: async () => {
       bindCount += 1;
       if (bindCount === 1) throw new Error("temporary writeback failure");
@@ -132,6 +134,7 @@ test("automatic native launch revalidates status and Codex assignment", async ()
     },
     loadTask: async () => invalid,
     resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => "/tmp/taskboard/bin/taskctl",
     bindSession: async () => invalid,
     skillPath: "/tmp/manage-taskboard/SKILL.md",
     codexActorId: CODEX_ACTOR_ID,
@@ -140,6 +143,60 @@ test("automatic native launch revalidates status and Codex assignment", async ()
   await assert.rejects(
     coordinator.launch(launchInput("invalid")),
     (error) => error.code === "INVALID_AGENT_LAUNCH_STATE",
+  );
+  assert.equal(createCount, 0);
+});
+
+test("native task instructions use the absolute taskctl shim for the whole turn", async () => {
+  const current = task("quoted");
+  let createInput;
+  const coordinator = createCodexTaskLaunchCoordinator({
+    desktopController: {
+      async createTask(input) {
+        createInput = input;
+        return { sessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+      },
+    },
+    loadTask: async () => current,
+    resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => "/tmp/taskboard's bin/taskctl",
+    bindSession: async () => ({ ...current, version: 2 }),
+    skillPath: "/tmp/manage-taskboard/SKILL.md",
+    codexActorId: CODEX_ACTOR_ID,
+  });
+
+  await coordinator.launch(launchInput("quoted"));
+
+  assert.match(createInput.instruction, /^e-taskboard Address task TEST-quoted\./);
+  assert.match(createInput.instruction, /for every Taskboard operation in this task/);
+  assert.match(
+    createInput.instruction,
+    /first run '\/tmp\/taskboard'\\''s bin\/taskctl' issue brief 'TEST-quoted' --json\.$/,
+  );
+  assert.ok(createInput.instruction.length <= 1_024);
+});
+
+test("native task launch rejects instructions over the injector limit", async () => {
+  const current = task("long");
+  let createCount = 0;
+  const coordinator = createCodexTaskLaunchCoordinator({
+    desktopController: {
+      async createTask() {
+        createCount += 1;
+        return { sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" };
+      },
+    },
+    loadTask: async () => current,
+    resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => `/tmp/${"x".repeat(600)}/taskctl`,
+    bindSession: async () => current,
+    skillPath: "/tmp/manage-taskboard/SKILL.md",
+    codexActorId: CODEX_ACTOR_ID,
+  });
+
+  await assert.rejects(
+    coordinator.launch(launchInput("long")),
+    (error) => error.code === "CODEX_INSTRUCTION_TOO_LONG",
   );
   assert.equal(createCount, 0);
 });

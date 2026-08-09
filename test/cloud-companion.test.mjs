@@ -846,6 +846,6 @@ test("without cloud configuration taskctl keeps using the local companion", asyn
   assert.equal(execCalled, false);
   assert.deepEqual(result.stdout.json(), {
     projects: [{ id: "local", name: "Local" }],
-    schemaVersion: 2,
+    schemaVersion: 3,
   });
 });

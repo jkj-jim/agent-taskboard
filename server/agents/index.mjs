@@ -11,8 +11,8 @@ export { DEFAULT_AGENT_KIND };
  * `server/agents/` must look agents up here instead of branching on a kind.
  *
  * An agent exposes:
- *   id, label, actor, assigneeTarget, sessionEnvVars, executable
- *   preassignsSessionId, createSessionId?
+ *   id, label, actor, assigneeTarget, executable
+ *   preassignsSessionId, createSessionId?, sessionExists(id)
  *   resolveWorkspace(projectId) -> { workspacePath, addDirectories, project }
  *   catalog(projectId)          -> { models, skills, sandboxes }
  *   buildTurn(input)            -> { args, cwd, prompt }

@@ -27,6 +27,7 @@ import {
 } from "../shared/agents.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { createAgentRegistry } from "./agents/index.mjs";
+import { createTaskctlRuntime } from "./agents/taskctl-bin.mjs";
 import { createDeviceWorkspaces } from "./agents/workspaces.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
 import {
@@ -1452,13 +1453,15 @@ export function createTaskboardServer(options = {}) {
       deviceWorkspaces,
     },
   });
+  const taskctlRuntime = createTaskctlRuntime({
+    binDirectory: path.join(resolved.dataDirectory, "bin"),
+    cliPath: path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
+  });
   const aiChat = new AiChatService({
     database,
     agents,
     manageTaskboardSkillPath: resolved.skillPath,
-    taskboardUrl: `http://127.0.0.1:${resolvePort()}`,
-    taskctlBinDirectory: path.join(resolved.dataDirectory, "bin"),
-    taskctlCliPath: path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
+    taskctlRuntime,
     onIssueSession: ({ issueId }) => {
       const task = database.getTask(issueId);
       if (task) events.emit("task.updated", { task });
@@ -1504,6 +1507,7 @@ export function createTaskboardServer(options = {}) {
     desktopController: codexDesktopController,
     skillPath: resolved.skillPath,
     codexActorId: codexDefinition.actor.id,
+    resolveTaskctlShim: () => taskctlRuntime.shimPath(),
     loadTask: async (taskId, input) => {
       if (input.cloud) {
         return (await cloudJson(
@@ -2388,7 +2392,17 @@ export function createTaskboardServer(options = {}) {
         };
         const onListening = () => {
           server.off("error", onError);
-          resolve();
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            reject(new Error("Taskboard server did not expose a TCP listening address"));
+            return;
+          }
+          try {
+            taskctlRuntime.initialize(`http://127.0.0.1:${address.port}`);
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
         };
         server.once("error", onError);
         server.once("listening", onListening);

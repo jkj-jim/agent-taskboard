@@ -35,12 +35,14 @@ async function run(argv, fetchImplementation, overrides = {}) {
   };
 }
 
-test("parseArgs supports equals syntax and boolean --json", () => {
-  assert.deepEqual(parseArgs(["issue", "list", "--project=local", "--json"]), {
+test("parseArgs supports equals syntax and boolean list controls", () => {
+  assert.deepEqual(parseArgs([
+    "issue", "list", "--project=local", "--all-statuses", "--full", "--json",
+  ]), {
     resource: "issue",
     action: "list",
     operands: [],
-    options: { project: "local", json: true },
+    options: { project: "local", "all-statuses": true, full: true, json: true },
   });
 });
 
@@ -54,7 +56,7 @@ test("project list uses the default local service and adds schemaVersion", async
   assert.equal(result.exitCode, 0);
   assert.deepEqual(result.stdout, {
     projects: [{ id: "local", name: "Local" }],
-    schemaVersion: 2,
+    schemaVersion: 3,
   });
   assert.equal(calls[0].url, "http://127.0.0.1:47823/api/projects");
   assert.equal(calls[0].init.method, "GET");
@@ -92,19 +94,287 @@ test("project create sends id, name, and an absolute workspace path", async () =
   assert.equal(requestBody.workspacePath.endsWith("/docs"), true);
 });
 
-test("issue list serializes project and status filters", async () => {
+test("issue list serializes explicit filters and returns a concise task index", async () => {
   let requestedUrl;
   const result = await run(
     ["issue", "list", "--project", "local", "--status", "todo"],
     async (url) => {
       requestedUrl = url;
-      return response({ tasks: [] });
+      return response({ tasks: [{
+        id: "task-internal",
+        identifier: "LOCAL-1",
+        projectId: "local",
+        title: "Choose this task",
+        description: "  第一行\n\t" + "😀".repeat(48) + " 结尾 ",
+        status: "todo",
+        priority: "high",
+        labels: ["agent"],
+        sortOrder: 1024,
+        threadId: "thread-old",
+        creatorType: "user",
+        creatorId: "user-1",
+        creatorName: "Alice",
+        creatorAvatarUrl: null,
+        assignee: {
+          type: "agent",
+          id: "codex-agent",
+          name: "Codex Agent",
+          avatarUrl: null,
+        },
+        version: 4,
+        createdAt: "2026-08-09T00:00:00.000Z",
+        updatedAt: "2026-08-09T00:00:00.000Z",
+        relations: { parent: null, subIssues: [], blockedBy: [], blocks: [], related: [] },
+      }] });
     },
   );
 
   assert.equal(result.exitCode, 0);
   assert.equal(requestedUrl.searchParams.get("projectId"), "local");
   assert.equal(requestedUrl.searchParams.get("status"), "todo");
+  assert.deepEqual(result.stdout, {
+    tasks: [{
+      identifier: "LOCAL-1",
+      title: "Choose this task",
+      descriptionPreview: "第一行 " + "😀".repeat(46),
+      descriptionTruncated: true,
+      status: "todo",
+      priority: "high",
+      labels: ["agent"],
+      assignee: { type: "agent", id: "codex-agent", name: "Codex Agent" },
+      version: 4,
+    }],
+    schemaVersion: 3,
+  });
+});
+
+test("issue list defaults to active summaries with Unicode-safe 50-character previews", async () => {
+  const task = (identifier, status, description) => ({
+    identifier,
+    title: identifier,
+    description,
+    status,
+    priority: "none",
+    labels: [],
+    assignee: { type: "user", id: "user-1", name: "Alice" },
+    version: 1,
+  });
+  const result = await run(["issue", "list", "--project", "local"], async () => response({
+    tasks: [
+      task("LOCAL-1", "backlog", "界".repeat(50)),
+      task("LOCAL-2", "blocked", "😀".repeat(51)),
+      task("LOCAL-3", "done", "must be omitted"),
+      task("LOCAL-4", "canceled", "must also be omitted"),
+      task("LOCAL-5", "todo", "  A\n\tB  "),
+      task("LOCAL-6", "in_progress", "active implementation"),
+      task("LOCAL-7", "in_review", "active review"),
+    ],
+  }));
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.stdout.tasks.map((task) => task.identifier), [
+    "LOCAL-1", "LOCAL-2", "LOCAL-5", "LOCAL-6", "LOCAL-7",
+  ]);
+  assert.equal(result.stdout.tasks[0].descriptionPreview, "界".repeat(50));
+  assert.equal(result.stdout.tasks[0].descriptionTruncated, false);
+  assert.equal(result.stdout.tasks[1].descriptionPreview, "😀".repeat(50));
+  assert.equal(result.stdout.tasks[1].descriptionTruncated, true);
+  assert.equal(Array.from(result.stdout.tasks[1].descriptionPreview).length, 50);
+  assert.equal(result.stdout.tasks[2].descriptionPreview, "A B");
+  assert.equal(result.stdout.tasks[2].descriptionTruncated, false);
+});
+
+test("issue list exposes terminal summaries explicitly and full objects only on request", async () => {
+  const fullTask = {
+    id: "task-internal",
+    identifier: "LOCAL-9",
+    projectId: "local",
+    title: "Historical task",
+    description: "Full historical description",
+    status: "done",
+    priority: "low",
+    labels: [],
+    assignee: { type: "user", id: "user-1", name: "Alice", avatarUrl: null },
+    sortOrder: 1000,
+    version: 8,
+  };
+  let explicitStatusUrl;
+  const historical = await run(
+    ["issue", "list", "--project", "local", "--status", "done"],
+    async (url) => {
+      explicitStatusUrl = url;
+      return response({ tasks: [fullTask] });
+    },
+  );
+  assert.equal(explicitStatusUrl.searchParams.get("status"), "done");
+  assert.equal(historical.stdout.tasks[0].identifier, "LOCAL-9");
+  assert.equal(historical.stdout.tasks[0].description, undefined);
+
+  let allStatusesUrl;
+  const full = await run(
+    ["issue", "list", "--project", "local", "--all-statuses", "--full"],
+    async (url) => {
+      allStatusesUrl = url;
+      return response({ tasks: [fullTask] });
+    },
+  );
+  assert.equal(allStatusesUrl.searchParams.has("status"), false);
+  assert.deepEqual(full.stdout, { tasks: [fullTask], schemaVersion: 3 });
+});
+
+test("issue list rejects conflicting status scopes before calling the service", async () => {
+  const result = await run(
+    ["issue", "list", "--status", "todo", "--all-statuses"],
+    async () => assert.fail("fetch should not be called"),
+  );
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stderr.error.message, /--status and --all-statuses/);
+});
+
+test("issue brief fetches task context in parallel and emits the compact handoff contract", async () => {
+  const calls = [];
+  let releaseRequests;
+  const requestsReady = new Promise((resolve) => {
+    releaseRequests = resolve;
+  });
+  const execution = run(["issue", "brief", "TASK/1", "--json"], async (url, init) => {
+    calls.push({ pathname: url.pathname, method: init.method });
+    await requestsReady;
+    if (url.pathname.endsWith("/comments")) {
+      return response({
+        comments: [{
+          id: "comment-1",
+          taskId: "task-internal",
+          body: "用户反馈：保留完整交接。",
+          threadId: "thread-old",
+          authorType: "agent",
+          authorId: "codex-agent",
+          authorName: "Codex Agent",
+          authorAvatarUrl: null,
+          attachments: [{
+            id: "comment-attachment",
+            taskId: "task-internal",
+            commentId: "comment-1",
+            filename: "evidence.png",
+            contentType: "image/png",
+            size: 321,
+            createdAt: "2026-08-09T09:00:00.000Z",
+          }],
+          version: 3,
+          createdAt: "2026-08-09T08:00:00.000Z",
+          updatedAt: "2026-08-09T08:00:00.000Z",
+        }],
+      });
+    }
+    if (url.pathname.endsWith("/attachments")) {
+      return response({
+        attachments: [{
+          id: "task-attachment",
+          taskId: "task-internal",
+          commentId: null,
+          filename: "requirements.pdf",
+          contentType: "application/pdf",
+          size: 654,
+          createdAt: "2026-08-09T07:00:00.000Z",
+        }],
+      });
+    }
+    return response({
+      task: {
+        id: "task-internal",
+        identifier: "TASK-1",
+        projectId: "project",
+        title: "Compact context",
+        description: "Keep the fields needed for execution.",
+        status: "in_progress",
+        priority: "high",
+        labels: ["agent"],
+        sortOrder: 2048,
+        threadId: "thread-old",
+        creatorType: "user",
+        creatorId: "user-1",
+        creatorName: "Alice",
+        creatorAvatarUrl: null,
+        assignee: {
+          type: "agent",
+          id: "codex-agent",
+          name: "Codex Agent",
+          avatarUrl: null,
+        },
+        workflowId: "workflow-1",
+        developmentContext: { type: "branch", branch: "feature/context" },
+        dueDate: "2026-08-12",
+        recurrence: { interval: 1, unit: "week" },
+        archivedAt: null,
+        version: 7,
+        createdAt: "2026-08-09T06:00:00.000Z",
+        updatedAt: "2026-08-09T08:00:00.000Z",
+        relations: {
+          parent: { identifier: "TASK-0", title: "Parent", status: "todo" },
+          subIssues: [{ identifier: "TASK-2", title: "Child", status: "todo" }],
+          blockedBy: [{ identifier: "TASK-3", title: "Blocker", status: "in_progress" }],
+          blocks: [{ identifier: "TASK-4", title: "Blocked", status: "todo" }],
+          related: [{ identifier: "TASK-5", title: "Related", status: "done" }],
+        },
+      },
+    });
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [
+    { pathname: "/api/tasks/TASK%2F1", method: "GET" },
+    { pathname: "/api/tasks/TASK%2F1/comments", method: "GET" },
+    { pathname: "/api/tasks/TASK%2F1/attachments", method: "GET" },
+  ]);
+  releaseRequests();
+  const result = await execution;
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.stdout, {
+    task: {
+      identifier: "TASK-1",
+      projectId: "project",
+      title: "Compact context",
+      description: "Keep the fields needed for execution.",
+      status: "in_progress",
+      priority: "high",
+      labels: ["agent"],
+      version: 7,
+      assignee: { type: "agent", id: "codex-agent", name: "Codex Agent" },
+      developmentContext: { type: "branch", branch: "feature/context" },
+      relations: {
+        parent: { identifier: "TASK-0", title: "Parent", status: "todo" },
+        subIssues: [{ identifier: "TASK-2", title: "Child", status: "todo" }],
+        blockedBy: [{ identifier: "TASK-3", title: "Blocker", status: "in_progress" }],
+        blocks: [{ identifier: "TASK-4", title: "Blocked", status: "todo" }],
+        related: [{ identifier: "TASK-5", title: "Related", status: "done" }],
+      },
+      dueDate: "2026-08-12",
+      recurrence: { interval: 1, unit: "week" },
+      workflowId: "workflow-1",
+    },
+    comments: [{
+      id: "comment-1",
+      version: 3,
+      authorType: "agent",
+      authorName: "Codex Agent",
+      createdAt: "2026-08-09T08:00:00.000Z",
+      body: "用户反馈：保留完整交接。",
+      attachments: [{
+        id: "comment-attachment",
+        filename: "evidence.png",
+        contentType: "image/png",
+        size: 321,
+      }],
+    }],
+    attachments: [{
+      id: "task-attachment",
+      filename: "requirements.pdf",
+      contentType: "application/pdf",
+      size: 654,
+    }],
+    schemaVersion: 3,
+  });
 });
 
 test("issue commands accept in-review, blocked, and canceled statuses", async () => {
@@ -500,7 +770,7 @@ test("API conflicts produce stable JSON on stderr and exit code 5", async () => 
 
   assert.equal(result.exitCode, 5);
   assert.deepEqual(result.stderr, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     error: { code: "VERSION_CONFLICT", message: "Task changed" },
   });
 });

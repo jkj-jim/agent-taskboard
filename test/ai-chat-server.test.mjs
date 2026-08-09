@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 import { createTaskboardServer } from "../server/index.mjs";
 import { SKILL_MARKER } from "../server/agents/prompt.mjs";
+
+const execFile = promisify(execFileCallback);
 
 async function createServerFixture(host = "127.0.0.1") {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-server-"));
@@ -15,6 +19,7 @@ async function createServerFixture(host = "127.0.0.1") {
   const workspace = await realpath(workspacePath);
   const codexExecutable = path.join(directory, "fake-codex.mjs");
   await writeFile(codexExecutable, `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] === "debug") {
   process.stdout.write('{"models":[{"slug":"gpt-real","display_name":"GPT Real","description":"","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"service_tiers":[]}]}');
@@ -28,6 +33,12 @@ if (args[0] === "debug") {
     }
   });
 } else {
+  const taskctl = spawnSync("taskctl", ["project", "list", "--json"], { encoding: "utf8" });
+  if (taskctl.status !== 0) {
+    process.stderr.write(taskctl.stderr || "bare taskctl was not available to Codex");
+    process.exit(1);
+  }
+  JSON.parse(taskctl.stdout);
   process.stdin.resume();
   process.stdin.on("end", () => {
     process.stdout.write('{"type":"thread.started","thread_id":"session-1"}\\n');
@@ -39,10 +50,17 @@ if (args[0] === "debug") {
   await chmod(codexExecutable, 0o755);
   const claudeExecutable = path.join(directory, "fake-claude.mjs");
   await writeFile(claudeExecutable, `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] === "auth" && args[1] === "status") {
   process.stdout.write('{"loggedIn":true}');
 } else {
+  const taskctl = spawnSync("taskctl", ["project", "list", "--json"], { encoding: "utf8" });
+  if (taskctl.status !== 0) {
+    process.stderr.write(taskctl.stderr || "bare taskctl was not available to Claude");
+    process.exit(1);
+  }
+  JSON.parse(taskctl.stdout);
   const sessionFlag = args.indexOf("--session-id");
   const resumeFlag = args.indexOf("--resume");
   const sessionId = sessionFlag >= 0 ? args[sessionFlag + 1] : args[resumeFlag + 1];
@@ -247,10 +265,14 @@ test("a user move into in progress is launched natively exactly once without cod
     ]);
     assert.equal(fixture.nativeLaunches.length, 1);
     assert.equal(fixture.nativeLaunches[0].workspacePath, fixture.workspace);
-    assert.equal(
+    const taskctlShim = path.join(fixture.directory, "bin", "taskctl");
+    assert.match(
       fixture.nativeLaunches[0].instruction,
-      `e-taskboard Address task ${created.body.task.identifier}`,
+      new RegExp(`^e-taskboard Address task ${created.body.task.identifier}\\.`),
     );
+    assert.equal(fixture.nativeLaunches[0].instruction.includes(`'${taskctlShim}'`), true);
+    assert.match(fixture.nativeLaunches[0].instruction, /for every Taskboard operation/);
+    assert.match(fixture.nativeLaunches[0].instruction, /issue brief/);
     assert.equal(fixture.nativeLaunches[0].presentation, "background");
 
     const duplicate = await request(
@@ -309,6 +331,90 @@ test("a user move into in progress is launched natively exactly once without cod
     const afterAgentClaim = await request(fixture.baseUrl, "/api/local/ai/threads");
     assert.equal(afterAgentClaim.body.threads.length, 0);
     assert.equal(fixture.nativeLaunches.length, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the native taskctl shim uses the random listening port for reads and later writes", async () => {
+  const fixture = await createServerFixture();
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Use the runtime taskboard origin",
+        status: "todo",
+        assigneeTarget: "codex-agent",
+      },
+    });
+    const moved = await request(fixture.baseUrl, `/api/tasks/${created.body.task.id}/move`, {
+      method: "POST",
+      body: {
+        version: created.body.task.version,
+        status: "in_progress",
+      },
+    });
+    const launched = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      {
+        method: "POST",
+        body: {
+          expectedVersion: moved.body.task.version,
+          trigger: "status-transition",
+          presentation: "background",
+          previousSessionId: null,
+        },
+      },
+    );
+    assert.equal(launched.response.status, 200);
+
+    const shimPath = path.join(fixture.directory, "bin", "taskctl");
+    const agentEnv = {
+      ...process.env,
+      CODEX_TASKBOARD_URL: "http://127.0.0.1:1",
+      CODEX_THREAD_ID: launched.body.sessionId,
+    };
+    const brief = JSON.parse((await execFile(
+      shimPath,
+      ["issue", "brief", created.body.task.identifier, "--json"],
+      { env: agentEnv },
+    )).stdout);
+    assert.equal(brief.task.identifier, created.body.task.identifier);
+    assert.equal(brief.task.version, launched.body.task.version);
+    assert.deepEqual(brief.comments, []);
+
+    const added = JSON.parse((await execFile(
+      shimPath,
+      [
+        "comment", "add", created.body.task.identifier,
+        "--body", "交付：随机端口读写验证通过。",
+        "--json",
+      ],
+      { env: agentEnv },
+    )).stdout);
+    assert.equal(added.comment.body, "交付：随机端口读写验证通过。");
+
+    const reviewed = JSON.parse((await execFile(
+      shimPath,
+      [
+        "issue", "move", created.body.task.identifier,
+        "--status", "in_review",
+        "--if-version", String(launched.body.task.version),
+        "--json",
+      ],
+      { env: agentEnv },
+    )).stdout);
+    assert.equal(reviewed.task.status, "in_review");
+
+    const refreshed = await request(fixture.baseUrl, `/api/tasks/${created.body.task.id}`);
+    assert.equal(refreshed.body.task.status, "in_review");
+    const comments = await request(
+      fixture.baseUrl,
+      `/api/tasks/${created.body.task.id}/comments`,
+    );
+    assert.equal(comments.body.comments[0].body, "交付：随机端口读写验证通过。");
   } finally {
     await fixture.close();
   }

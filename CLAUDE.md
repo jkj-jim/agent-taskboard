@@ -1,1 +1,1 @@
-/Users/jim-forest/Desktop/个人/agent-taskboard/AGENTS.md
+AGENTS.md

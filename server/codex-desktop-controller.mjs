@@ -7,6 +7,7 @@ import {
   codexTargets,
 } from "../shared/codex-cdp.mjs";
 import { ApiError } from "./database.mjs";
+import { shellQuote } from "./agents/taskctl-bin.mjs";
 
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INJECTION_KEY = "__codexTaskboardInjection__";
@@ -395,6 +396,7 @@ export function createCodexTaskLaunchCoordinator({
   loadTask,
   bindSession,
   resolveWorkspace,
+  resolveTaskctlShim,
   skillPath,
   codexActorId,
 }) {
@@ -437,9 +439,24 @@ export function createCodexTaskLaunchCoordinator({
           `Project '${task.projectId}' has no available device workspace`,
         );
       }
+      const taskctlShim = await resolveTaskctlShim();
+      const quotedTaskctlShim = shellQuote(taskctlShim);
+      const quotedIdentifier = shellQuote(task.identifier);
+      const instruction = [
+        `e-taskboard Address task ${task.identifier}.`,
+        `Use ${quotedTaskctlShim} for every Taskboard operation in this task;`,
+        `first run ${quotedTaskctlShim} issue brief ${quotedIdentifier} --json.`,
+      ].join(" ");
+      if (instruction.length > 1_024) {
+        throw new ApiError(
+          409,
+          "CODEX_INSTRUCTION_TOO_LONG",
+          "The native Codex task instruction exceeds 1,024 characters",
+        );
+      }
       const created = await serializedCreate({
         workspacePath,
-        instruction: `e-taskboard Address task ${task.identifier}`,
+        instruction,
         skillPath,
         presentation: input.presentation,
       });

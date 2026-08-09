@@ -176,12 +176,17 @@ test("the stable name and generated prompt are project-scoped and encode the cla
   assert.match(prompt, /ppt-skill/);
   assert.match(prompt, /\/Users\/example\/Documents\/ppt-skill/);
   assert.match(prompt, /每次仅处理一个 todo/);
-  assert.match(prompt, /issue get/);
-  assert.match(prompt, /comment list/);
+  assert.match(prompt, /issue list --project ppt-skill --status todo --json/);
+  assert.match(prompt, /查看精简候选，只选一个/);
+  assert.match(prompt, /issue brief/);
+  assert.doesNotMatch(prompt, /issue get|comment list/);
   assert.match(prompt, /最新 version/);
   assert.match(prompt, /in_progress/);
   assert.match(prompt, /版本冲突.*跳过/);
-  assert.match(prompt, /关键改动、验证结果、执行结果和剩余风险/);
+  assert.match(prompt, /最多写一条.*「交付：」/);
+  assert.match(prompt, /通常控制在 300 字内/);
+  assert.match(prompt, /关键改动、验证结论、交付结果与剩余风险/);
+  assert.match(prompt, /省略原始日志、探索过程和逐文件清单/);
   assert.match(prompt, /in_review/);
   assert.match(prompt, /已绑定.*branch.*worktree/);
 });
@@ -273,6 +278,36 @@ test("ensure-active is idempotent when the listed automation already matches", a
 
   assert.deepEqual(calls, [{ method: "list-automations", params: {} }]);
   assert.deepEqual(response, { item: existing });
+});
+
+test("ensure-active refreshes an active automation that still has the old prompt", async () => {
+  const existing = {
+    id: "automation-1",
+    status: "ACTIVE",
+    ...buildTaskboardAutomationSpec(baseRequest),
+    prompt: "旧版提示：issue get 后再 comment list",
+  };
+  const calls = [];
+  await reconcileTaskboardAutomation(
+    { ...baseRequest, automationId: existing.id },
+    async (method, params) => {
+      calls.push({ method, params });
+      if (method === "list-automations") return { items: [existing] };
+      return { item: params };
+    },
+  );
+
+  assert.deepEqual(calls, [
+    { method: "list-automations", params: {} },
+    {
+      method: "automation-update",
+      params: {
+        ...buildTaskboardAutomationSpec(baseRequest),
+        id: existing.id,
+        status: "ACTIVE",
+      },
+    },
+  ]);
 });
 
 test("a foreign automation id never grants control outside the project", async () => {
