@@ -108,6 +108,8 @@ taskctl issue list --project PROJECT_ID --all-statuses --full --json
 
 `codex:inject` watcher 每两秒续一次本机桥心跳，并检查注入脚本的内容哈希。它只连接 Codex 主窗口，过滤带 `initialRoute` 的头像浮层、语音输入等辅助页面；心跳请求在 1.5 秒内无响应时丢弃该 CDP 连接，下一轮自动重连，避免 watcher 进程存活却心跳循环被永久卡住。脚本变化时由同一个 watcher 关闭旧 CDP 连接并重新挂载当前源码；`npm run build` 只刷新 iframe，不终止或替换前台 watcher。原生启动的前置检查不要求当前页面已经存在新对话输入框，导航完成后再单独等待它；心跳、桥接或侧栏缺失时返回具体原因，不再统一报“injector or native DOM”。
 
+任务面板挂载到当前可见的 Codex 主内容布局，同时支持站点、插件等页面使用的 `default` 布局和 session 页使用的 `thread-edge-scroll` 布局；它不依赖全局第一个 `<main>` 或标题栏坐标，避免被不可见的 webview 容器干扰。
+
 AI 面板、Codex 子进程和 Claude 子进程共享同一份 memoized shim 初始化，避免并发覆盖或出现半截文件。随机端口和非默认端口也会连接当前服务，而不是回退到 47823。
 
 ### 1,024 字符限制是谁的

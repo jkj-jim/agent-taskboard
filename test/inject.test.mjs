@@ -21,7 +21,7 @@ const skillInterface = await readFile(
 
 test("injection is an idempotent IIFE guarded by its current source hash", () => {
   assert.match(source, /^\(\(\) => \{/);
-  assert.match(source, /const VERSION = "0\.7\.0"/);
+  assert.match(source, /const VERSION = "0\.7\.1"/);
   assert.match(source, /const SOURCE_HASH = window\.__CODEX_TASKBOARD_SOURCE_HASH__/);
   assert.match(source, /const SENTINEL_KEY = "__codexTaskboardInjection__"/);
   assert.match(source, /previous\?\.sourceHash === SOURCE_HASH/);
@@ -43,7 +43,11 @@ test("entry clones the native Plugins row and the page covers the complete Codex
   assert.match(source, /return directButtons\.length >= 3/);
   assert.match(source, /const button = reference\.cloneNode\(true\)/);
   assert.match(source, /reference\.after\(entry\)/);
-  assert.match(source, /document\.querySelector\("\.app-shell-main-content-frame"\)/);
+  assert.match(source, /querySelectorAll\(\s*"\[data-app-shell-main-content-layout\]"/);
+  assert.match(source, /style\.visibility !== "hidden"/);
+  assert.match(source, /candidate\.hasAttribute\("data-app-shell-thread-edge-divider"\)/);
+  assert.doesNotMatch(source, /document\.querySelector\("main > header"\)/);
+  assert.doesNotMatch(source, /rect\.top >= headerBottom/);
   assert.match(source, /const surface = viewport\?\.parentElement/);
   assert.match(source, /surface\.appendChild\(page\)/);
   assert.match(source, /#\$\{PAGE_ID\} \{[\s\S]*?top: 0;/);
