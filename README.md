@@ -184,7 +184,7 @@ Codex 原生启动由本地 Taskboard 服务串行执行：服务连接已经运
 
 每台设备各自维护项目检出路径映射，并继续使用本地配套服务提供 Codex、Git/worktree、Skill 和 MCP 能力。云模式绝不会回退到本地 SQLite 数据库，也不会同时写入两处。
 
-有关所有者部署、配置现有 GitHub 安装、轮换密码、映射本地路径，以及一次性迁移本地数据的流程，请参阅[云协作](docs/cloud-collaboration.md)。
+有关所有者部署、配置现有 GitHub 安装、轮换密码、映射本地路径，以及一次性迁移本地数据的流程，请参阅[云协作](document/cloud-collaboration.md)。
 
 ## 验证
 
