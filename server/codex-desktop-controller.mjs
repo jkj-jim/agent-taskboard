@@ -443,9 +443,9 @@ export function createCodexTaskLaunchCoordinator({
       const quotedTaskctlShim = shellQuote(taskctlShim);
       const quotedIdentifier = shellQuote(task.identifier);
       const instruction = [
-        `e-taskboard Address task ${task.identifier}.`,
-        `Use ${quotedTaskctlShim} for every Taskboard operation in this task;`,
-        `first run ${quotedTaskctlShim} issue brief ${quotedIdentifier} --json.`,
+        `e-taskboard 处理任务 ${task.identifier}。`,
+        `本任务中的每一次 Taskboard 操作都使用 ${quotedTaskctlShim}；`,
+        `先运行 ${quotedTaskctlShim} issue brief ${quotedIdentifier} --json。`,
       ].join(" ");
       if (instruction.length > 1_024) {
         throw new ApiError(

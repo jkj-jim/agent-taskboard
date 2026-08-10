@@ -167,11 +167,11 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
 
   await coordinator.launch(launchInput("quoted"));
 
-  assert.match(createInput.instruction, /^e-taskboard Address task TEST-quoted\./);
-  assert.match(createInput.instruction, /for every Taskboard operation in this task/);
+  assert.match(createInput.instruction, /^e-taskboard 处理任务 TEST-quoted。/);
+  assert.match(createInput.instruction, /每一次 Taskboard 操作都使用/);
   assert.match(
     createInput.instruction,
-    /first run '\/tmp\/taskboard'\\''s bin\/taskctl' issue brief 'TEST-quoted' --json\.$/,
+    /先运行 '\/tmp\/taskboard'\\''s bin\/taskctl' issue brief 'TEST-quoted' --json。$/,
   );
   assert.ok(createInput.instruction.length <= 1_024);
 });

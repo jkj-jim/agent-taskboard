@@ -62,11 +62,11 @@ test("board cards keep relation context compact", () => {
 });
 
 test("the taskboard skill tracks substantive requests before implementation", () => {
-  assert.match(skillSource, /Search active issues before creating one/i);
-  assert.match(skillSource, /append/i);
-  assert.match(skillSource, /parent|sub-issue/i);
-  assert.match(skillSource, /blocked|related/i);
-  assert.match(skillSource, /small|tiny|trivial/i);
+  assert.match(skillSource, /创建任务前先搜索活跃任务/i);
+  assert.match(skillSource, /追加/i);
+  assert.match(skillSource, /父任务|子任务/i);
+  assert.match(skillSource, /阻塞|相关/i);
+  assert.match(skillSource, /细小|琐碎/i);
   assert.match(cliReference, /issue relation add/);
   assert.match(cliReference, /--type parent/);
   assert.match(cliReference, /--type blocks\|blocked_by\|related/);

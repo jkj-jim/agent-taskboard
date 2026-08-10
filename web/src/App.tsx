@@ -1813,7 +1813,7 @@ export function App() {
       ?? hostContext?.workspacePath;
     // The assignee decides which client picks the work up.
     const agentKind = agentByActorId(task.assignee.id)?.kind ?? "codex";
-    const prompt = `Use the manage-taskboard skill to address task ${task.identifier}.`;
+    const prompt = `使用 manage-taskboard skill 处理任务 ${task.identifier}。`;
 
     if (agentKind !== "codex") {
       const link = agentNewSessionLink(agentKind, { prompt, workspacePath });

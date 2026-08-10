@@ -277,7 +277,7 @@ export function createClaudeAgent(config) {
         (skill) => `the ${skill.id} skill`,
       );
       const prompt = [
-        `Use the ${skillName} skill for every taskboard read or write in this turn.`,
+        `本轮每一次 Taskboard 读写都使用 ${skillName} skill。`,
         "",
         "<taskboard_context>",
         ...taskboardContextLines(thread, attachmentPaths),

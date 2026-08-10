@@ -1572,7 +1572,7 @@ export function createTaskboardServer(options = {}) {
         agentKind: agent.id,
       });
       const run = await aiChat.startTurn(thread.id, {
-        message: `Address task ${task.identifier}.`,
+        message: `处理任务 ${task.identifier}。`,
       });
       return {
         status: "started",

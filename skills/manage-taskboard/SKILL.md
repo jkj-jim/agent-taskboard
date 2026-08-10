@@ -1,11 +1,11 @@
 ---
 name: manage-taskboard
-description: Manage taskboard projects, issues, issue relations, and comments through the taskctl CLI. Use when the agent needs to track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, or coordinate concurrent updates.
+description: 通过 taskctl CLI 管理 Taskboard 的项目、任务、任务关系和评论。需要跟踪新需求、检查项目工作、创建或更新任务、关联依赖工作、补充进展说明、开始处理任务、记录交付结果或协调并发更新时使用。
 ---
 
-# Manage Taskboard
+# 管理 Taskboard
 
-Use `taskctl` for every project, issue, and comment operation. The common execution commands are:
+所有项目、任务和评论操作都使用 `taskctl`。常用命令如下：
 
 ```bash
 taskctl issue list --project PROJECT_ID [--status STATUS | --all-statuses] [--full] --json
@@ -14,28 +14,28 @@ taskctl issue move ISSUE_ID --status STATUS --if-version N --json
 taskctl comment add ISSUE_ID --body TEXT --json
 ```
 
-Read [references/cli.md](references/cli.md) only when you need another command or an option not shown here. If the launch instruction gives an absolute `taskctl` shim path, use that path for every Taskboard command in the turn, not only the first read.
+只有需要此处未列出的命令或选项时，才读取 [references/cli.md](references/cli.md)。如果启动指令给出了绝对路径形式的 `taskctl` shim，本轮每一次 Taskboard 操作都必须使用该路径，不只是首次读取。
 
-## Workflow
+## 工作流程
 
-1. Search active issues before creating one. Use `context current`, then run the default `issue list` for that project. Its concise index omits `done` and `canceled` issues and exposes only a 50-character `descriptionPreview`; compare identifiers, titles, previews, and status. Do not load completed work for routine duplicate checks. If an active candidate looks related or ambiguous, run `issue brief` for that candidate before deciding.
-   - If an issue already tracks the same requirement, append the new requirement or acceptance detail to that issue without discarding its existing scope.
-   - If the work depends on, blocks, is blocked by, or is closely related to another issue, add the matching issue relation.
-   - Use a parent/sub-issue relation when one requirement is a contained part of a larger issue. A child has one parent; a parent may have many sub-issues.
-   - Create a new issue only when no existing issue reasonably tracks the requirement.
-   - Do not create, append, or relate a tiny or trivial request that does not benefit from durable tracking.
-   - Use `--status done` for an explicit historical lookup. Reserve `--all-statuses --full` for statistics, export, or diagnosis; never use it for routine execution or duplicate checks.
-2. Before executing an issue, run `issue brief` once to read the latest issue content, all comments, relations, and non-empty attachments. Treat comments as part of the current requirements, especially when completed work has been returned for changes.
-   - In a description or comment, `![alt](/api/attachments/<id>/content)` marks an inline image at that exact position in the text.
-   - When understanding that image is necessary, use `attachment download` to save it locally, then inspect the saved file with an available image-viewing tool.
-3. Create or update issues with the CLI; consume its JSON output.
-   Issues created through `taskctl` are assigned to the running agent (Codex Agent or Claude Agent) by default. Later CLI updates do not change the assignee.
-4. Let `taskctl` attribute every issue, relation, or comment mutation to the current conversation. It reads `CODEX_THREAD_ID` inside Codex and `CLAUDE_CODE_SESSION_ID` inside Claude Code. Outside both, pass the exact conversation id with `--thread-id`.
-5. To claim a `todo` issue, move it to `in_progress` with `--if-version` from the latest read before starting implementation. If this claim reports a version conflict or a new read shows that its status changed, skip the issue and do not implement it. If the issue is already `in_progress` and assigned to the running agent, start work without moving it to `in_progress` again.
-6. Include `--if-version <version>` on every concurrent update, using the version returned by the latest read.
-7. Before requesting review, verify the requested work and acceptance criteria.
-8. Write comments as concise handoffs, not progress logs. These are maxima, not quotas: at most one `用户反馈：` comment per new feedback round, one `交付：` comment per delivery, and one `需决策：` or `阻塞：` comment when needed. The initial round usually needs only the delivery comment. Aim for about 300 Chinese characters, but exceed that when the next session needs the detail. Keep root causes, decisions, constraints, and ruled-out directions that prevent repeated work; omit raw logs, step-by-step exploration, failed-attempt details, and file-by-file diffs. Omit empty sections and add a new comment for a new round instead of rewriting an old one. After implementation and self-verification, add the `交付：` comment and move the issue to `in_review`. Never move it directly to `done`.
-9. Move an issue from `in_review` to `done` only when the user explicitly confirms acceptance or explicitly asks to mark it complete. Agent self-verification alone is not sufficient.
-10. Move work that cannot continue to `blocked`, and work that will not continue to `canceled`.
+1. 创建任务前先搜索活跃任务。先运行 `context current`，再对该项目运行默认的 `issue list`。该精简索引不返回 `done` 和 `canceled` 任务，只提供 50 个字符的 `descriptionPreview`；通过标识、标题、预览和状态判断是否重复。常规查重时不要加载已完成工作。如果某个活跃候选看起来相关或无法确定，先对它运行 `issue brief`，再作判断。
+   - 如果已有任务跟踪同一需求，把新需求或验收细节追加到原任务，不要丢弃其现有范围。
+   - 如果当前工作依赖、阻塞、受阻塞于其他任务，或与其他任务紧密相关，添加对应的任务关系。
+   - 当一个需求是更大任务中包含的一部分时，使用父任务/子任务关系。一个子任务只能有一个父任务，一个父任务可以有多个子任务。
+   - 只有没有现有任务能够合理承载该需求时，才创建新任务。
+   - 对不值得长期跟踪的细小或琐碎请求，不要创建任务，也不要追加或关联。
+   - 明确查询历史记录时使用 `--status done`。`--all-statuses --full` 只用于统计、导出或诊断，常规执行和查重不得使用。
+2. 执行任务前运行一次 `issue brief`，读取最新任务内容、全部评论、关系和非空附件。评论是当前要求的一部分，尤其是已交付工作被退回修改时。
+   - 描述或评论中的 `![alt](/api/attachments/<id>/content)` 表示位于该段文字准确位置的行内图片。
+   - 如果理解该图片是完成任务的必要条件，使用 `attachment download` 保存到本地，再用可用的图片查看工具检查。
+3. 使用 CLI 创建或更新任务，并读取它输出的 JSON。
+   通过 `taskctl` 创建的任务默认分配给当前运行的 Agent（Codex Agent 或 Claude Agent）。之后的 CLI 更新不会改变负责人。
+4. 让 `taskctl` 把每一次任务、关系或评论变更归因到当前会话。Codex 中读取 `CODEX_THREAD_ID`，Claude Code 中读取 `CLAUDE_CODE_SESSION_ID`；如果不在这两种环境中，使用 `--thread-id` 传入准确的会话 ID。
+5. 认领 `todo` 任务时，开始实施前使用最新读取结果中的版本号，通过 `--if-version` 将它移至 `in_progress`。如果认领时报版本冲突，或重新读取后发现状态已经变化，跳过该任务，不要实施。如果任务已经是 `in_progress` 且负责人是当前 Agent，直接开始工作，不要再次移至 `in_progress`。
+6. 每一次并发更新都带上 `--if-version <version>`，版本号取自最近一次读取。
+7. 请求审核前，验证要求的工作和验收标准。
+8. 评论应是精炼的交接信息，不是过程日志。以下是上限，不是数量要求：每轮新反馈至多一条 `用户反馈：` 评论，每次交付一条 `交付：` 评论，需要时一条 `需决策：` 或 `阻塞：` 评论。首轮通常只需交付评论。目标长度约 300 个中文字符，但如果下一次会话需要更多细节，可以超过。保留能避免重复工作的根因、决策、约束和已排除方向；省略原始日志、逐步探索过程、失败尝试细节和逐文件 diff。省略空章节；新一轮写新评论，不要改写旧评论。实现和自检完成后，添加 `交付：` 评论并把任务移至 `in_review`，绝不能直接移至 `done`。
+9. 只有用户明确确认验收，或明确要求标记完成时，才能把任务从 `in_review` 移至 `done`。Agent 自检不能替代用户验收。
+10. 无法继续的工作移至 `blocked`，不再继续的工作移至 `canceled`。
 
-For version conflicts outside the initial claim, read the issue again, reconcile the newer state, and retry with its current version.
+如果初次认领之外的写操作发生版本冲突，重新读取任务，协调更新后的状态，再使用当前版本重试。

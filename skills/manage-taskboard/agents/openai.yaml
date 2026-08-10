@@ -1,4 +1,4 @@
 interface:
-  display_name: "Manage Taskboard"
-  short_description: "Manage projects and issues with taskctl CLI"
-  default_prompt: "Use $manage-taskboard to manage this project and its issues with taskctl."
+  display_name: "管理 Taskboard"
+  short_description: "使用 taskctl CLI 管理项目和任务"
+  default_prompt: "使用 $manage-taskboard，通过 taskctl 管理这个项目及其任务。"
