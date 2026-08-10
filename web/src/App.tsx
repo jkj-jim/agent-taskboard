@@ -1843,7 +1843,7 @@ export function App() {
       setTasks((current) => sortTasks(current.map((candidate) => (
         candidate.id === result.task.id ? result.task : candidate
       ))));
-      if (!embedded || window.parent === window) {
+      if (result.status === "started" && (!embedded || window.parent === window)) {
         const link = agentSessionLink("codex", result.sessionId);
         if (link) window.location.assign(link);
       }

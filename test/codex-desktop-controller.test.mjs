@@ -5,7 +5,7 @@ import { test } from "node:test";
 import {
   createCodexTaskLaunchCoordinator,
 } from "../server/codex-desktop-controller.mjs";
-import { codexDebuggingPorts } from "../shared/codex-cdp.mjs";
+import { codexDebuggingPorts, codexTargets } from "../shared/codex-cdp.mjs";
 
 const CODEX_ACTOR_ID = "codex-agent";
 
@@ -31,12 +31,53 @@ function launchInput(taskId) {
   };
 }
 
+function manualLaunchInput(taskId) {
+  return {
+    taskId,
+    expectedVersion: 1,
+    trigger: "manual",
+    presentation: "foreground",
+    previousSessionId: null,
+  };
+}
+
 test("Codex CDP discovery only reads existing ChatGPT/Codex debug ports", () => {
   assert.deepEqual(codexDebuggingPorts(9229, [
     "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT --remote-debugging-port=9231",
     "/Applications/Codex.app/Contents/MacOS/Codex --remote-debugging-port=9232",
     "/Applications/Other.app/Contents/MacOS/Other --remote-debugging-port=9999",
   ].join("\n")), [9229, 9231, 9232]);
+});
+
+test("Codex target discovery excludes auxiliary initial-route windows", async () => {
+  const targets = await codexTargets(9231, async () => ({
+    ok: true,
+    json: async () => [
+      {
+        id: "main",
+        type: "page",
+        title: "Codex",
+        url: "app://-/index.html",
+        webSocketDebuggerUrl: "ws://127.0.0.1:9231/devtools/page/main",
+      },
+      {
+        id: "avatar",
+        type: "page",
+        title: "Codex",
+        url: "app://-/index.html?initialRoute=%2Favatar-overlay",
+        webSocketDebuggerUrl: "ws://127.0.0.1:9231/devtools/page/avatar",
+      },
+      {
+        id: "dictation",
+        type: "page",
+        title: "Codex",
+        url: "app://-/index.html?initialRoute=%2Fglobal-dictation",
+        webSocketDebuggerUrl: "ws://127.0.0.1:9231/devtools/page/dictation",
+      },
+    ],
+  }));
+
+  assert.deepEqual(targets.map((target) => target.id), ["main"]);
 });
 
 test("native task capture resolves the canonical conversation id behind optimistic sidebar ids", async () => {
@@ -46,6 +87,16 @@ test("native task capture resolves the canonical conversation id behind optimist
   assert.match(source, /knownSidebarRowIds/);
   assert.match(source, /createdSidebarRowId/);
   assert.match(source, /CODEX_THREAD_ID\.test\(value\) && !knownThreadIds\.has\(value\)/);
+});
+
+test("native launch readiness separates the live injector from the post-navigation composer", async () => {
+  const source = await readFile(new URL("../server/codex-desktop-controller.mjs", import.meta.url), "utf8");
+  assert.match(source, /compatible: apiReady && hostBindingReady && heartbeatFresh && bridgeReady && sidebarReady/);
+  assert.match(source, /composerReady/);
+  assert.doesNotMatch(source, /compatible:[^\n]*composerReady/);
+  assert.match(source, /Taskboard 注入器心跳已停止/);
+  assert.match(source, /await navigate\(cdp, "\/"\)/);
+  assert.match(source, /Codex new-task composer did not become ready/);
 });
 
 test("native task creation is process-serialized across different issues", async () => {
@@ -62,7 +113,10 @@ test("native task creation is process-serialized across different issues", async
         await new Promise((resolve) => releases.push(resolve));
         active -= 1;
         sequence += 1;
-        return { sessionId: `00000000-0000-4000-8000-${String(sequence).padStart(12, "0")}` };
+        return {
+          status: "started",
+          sessionId: `00000000-0000-4000-8000-${String(sequence).padStart(12, "0")}`,
+        };
       },
     },
     loadTask: (id) => tasks.get(id),
@@ -100,7 +154,7 @@ test("a failed writeback retries the cached native task without creating a dupli
     desktopController: {
       async createTask() {
         createCount += 1;
-        return { sessionId };
+        return { status: "started", sessionId };
       },
     },
     loadTask: async () => current,
@@ -129,7 +183,10 @@ test("automatic native launch revalidates status and Codex assignment", async ()
     desktopController: {
       async createTask() {
         createCount += 1;
-        return { sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+        return {
+          status: "started",
+          sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        };
       },
     },
     loadTask: async () => invalid,
@@ -154,7 +211,10 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
     desktopController: {
       async createTask(input) {
         createInput = input;
-        return { sessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+        return {
+          status: "started",
+          sessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        };
       },
     },
     loadTask: async () => current,
@@ -167,7 +227,7 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
 
   await coordinator.launch(launchInput("quoted"));
 
-  assert.match(createInput.instruction, /^e-taskboard 处理任务 TEST-quoted。/);
+  assert.match(createInput.instruction, /^处理任务 TEST-quoted。/);
   assert.match(createInput.instruction, /每一次 Taskboard 操作都使用/);
   assert.match(
     createInput.instruction,
@@ -183,7 +243,10 @@ test("native task launch rejects instructions over the injector limit", async ()
     desktopController: {
       async createTask() {
         createCount += 1;
-        return { sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" };
+        return {
+          status: "started",
+          sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        };
       },
     },
     loadTask: async () => current,
@@ -199,4 +262,39 @@ test("native task launch rejects instructions over the injector limit", async ()
     (error) => error.code === "CODEX_INSTRUCTION_TOO_LONG",
   );
   assert.equal(createCount, 0);
+});
+
+test("manual native launch only prepares an editable prompt and is repeatable", async () => {
+  const current = task("manual");
+  let createCount = 0;
+  let bindCount = 0;
+  const presentations = [];
+  const coordinator = createCodexTaskLaunchCoordinator({
+    desktopController: {
+      async createTask(input) {
+        createCount += 1;
+        presentations.push(input.presentation);
+        return { status: "prepared" };
+      },
+    },
+    loadTask: async () => current,
+    resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => "/tmp/taskboard/bin/taskctl",
+    bindSession: async () => {
+      bindCount += 1;
+      return current;
+    },
+    skillPath: "/tmp/manage-taskboard/SKILL.md",
+    codexActorId: CODEX_ACTOR_ID,
+  });
+
+  const first = await coordinator.launch(manualLaunchInput("manual"));
+  const second = await coordinator.launch(manualLaunchInput("manual"));
+
+  assert.equal(first.status, "prepared");
+  assert.equal(first.task.version, current.version);
+  assert.equal(second.status, "prepared");
+  assert.equal(createCount, 2);
+  assert.equal(bindCount, 0);
+  assert.deepEqual(presentations, ["foreground", "foreground"]);
 });

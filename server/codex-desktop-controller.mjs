@@ -41,6 +41,21 @@ async function evaluate(cdp, expression, { awaitPromise = false } = {}) {
 const CAPABILITY_EXPRESSION = `(() => {
   const api = window.${INJECTION_KEY};
   const heartbeat = Number(window.${HOST_HEARTBEAT});
+  const heartbeatAgeMs = Number.isFinite(heartbeat) ? Date.now() - heartbeat : null;
+  const apiReady = Boolean(
+    api
+    && typeof api.beginNativeTaskLaunch === 'function'
+    && typeof api.endNativeTaskLaunch === 'function'
+    && typeof api.prefillNativeTask === 'function'
+  );
+  const hostBindingReady = typeof window.${HOST_BINDING} === 'function';
+  const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs <= 8000;
+  const bridgeReady = Boolean(
+    window.electronBridge
+    && typeof window.electronBridge.sendMessageFromView === 'function'
+  );
+  const sidebarReady = Boolean(document.querySelector('[data-app-shell-sidebar-trigger="true"]'));
+  const composerReady = Boolean(document.querySelector('[data-codex-composer-root]'));
   const activeRow = document.querySelector(
     '[data-app-action-sidebar-thread-active="true"],'
     + '[data-app-action-sidebar-thread-selected="true"],'
@@ -66,20 +81,14 @@ const CAPABILITY_EXPRESSION = `(() => {
     return exposed;
   };
   return {
-    compatible: Boolean(
-      api
-      && typeof api.beginNativeTaskLaunch === 'function'
-      && typeof api.endNativeTaskLaunch === 'function'
-      && typeof api.prefillNativeTask === 'function'
-      && typeof window.${HOST_BINDING} === 'function'
-      && Number.isFinite(heartbeat)
-      && Date.now() - heartbeat <= 8000
-      && window.electronBridge
-      && typeof window.electronBridge.sendMessageFromView === 'function'
-      && document.querySelector('[data-app-shell-sidebar-trigger="true"]')
-      && document.querySelector('[data-codex-composer-root]')
-    ),
-    heartbeatAgeMs: Number.isFinite(heartbeat) ? Date.now() - heartbeat : null,
+    compatible: apiReady && hostBindingReady && heartbeatFresh && bridgeReady && sidebarReady,
+    apiReady,
+    hostBindingReady,
+    heartbeatFresh,
+    bridgeReady,
+    sidebarReady,
+    composerReady,
+    heartbeatAgeMs,
     activeThreadId: rowThreadId(activeRow),
     taskboardOpen: document.documentElement.getAttribute('data-codex-taskboard-open') === 'true',
     sidebarRowIds: Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-id]'))
@@ -90,6 +99,20 @@ const CAPABILITY_EXPRESSION = `(() => {
       .filter((id) => /^[0-9a-f-]{36}$/i.test(id)),
   };
 })()`;
+
+function capabilityFailureReason(capability) {
+  if (!capability?.apiReady) return "Codex 中没有加载兼容的 Taskboard 注入器";
+  if (!capability.hostBindingReady) return "Taskboard 注入器缺少本机桥接，请重新启动注入器";
+  if (!capability.heartbeatFresh) {
+    const age = Number.isFinite(capability.heartbeatAgeMs)
+      ? `（已停止 ${Math.max(1, Math.round(capability.heartbeatAgeMs / 1000))} 秒）`
+      : "";
+    return `Taskboard 注入器心跳已停止${age}，请重新运行 codex:inject`;
+  }
+  if (!capability.bridgeReady) return "当前 Codex 客户端没有提供原生任务桥接";
+  if (!capability.sidebarReady) return "Codex 侧栏尚未就绪，请稍后重试";
+  return "Codex 客户端、注入器或原生页面结构未就绪";
+}
 
 async function defaultConnect({
   preferredPort = DEFAULT_CODEX_DEBUGGING_PORT,
@@ -112,7 +135,7 @@ async function defaultConnect({
         await cdp.send("Runtime.enable");
         const capability = await evaluate(cdp, CAPABILITY_EXPRESSION);
         if (capability?.compatible) return { cdp, capability, port, target };
-        lastError = new Error("Codex is missing the compatible Taskboard injector or native DOM");
+        lastError = new Error(capabilityFailureReason(capability));
       } catch (error) {
         lastError = error;
       }
@@ -207,7 +230,7 @@ export function createCodexDesktopController(options = {}) {
     try {
       snapshot = await evaluate(cdp, CAPABILITY_EXPRESSION);
       if (!snapshot?.compatible) {
-        throw new Error("Codex 客户端、注入器或原生页面结构未就绪");
+        throw new Error(capabilityFailureReason(snapshot));
       }
       const beginSnapshot = await evaluate(cdp, `window.${INJECTION_KEY}.beginNativeTaskLaunch(${JSON.stringify(presentation)})`);
       began = true;
@@ -275,10 +298,14 @@ export function createCodexDesktopController(options = {}) {
 
       await evaluate(cdp, `window.${INJECTION_KEY}.prefillNativeTask(${JSON.stringify({
         instruction,
-        skillDisplayName: "Manage Taskboard",
         skillName: "manage-taskboard",
         skillPath,
       })})`, { awaitPromise: true });
+
+      if (presentation === "foreground") {
+        success = true;
+        return { status: "prepared" };
+      }
 
       const submitted = await evaluate(cdp, `(() => {
         const instruction = ${JSON.stringify(instruction)};
@@ -368,11 +395,9 @@ export function createCodexDesktopController(options = {}) {
         30_000,
       );
 
-      if (presentation === "background") {
-        await restoreRoute(cdp, snapshot.activeThreadId);
-      }
+      await restoreRoute(cdp, snapshot.activeThreadId);
       success = true;
-      return { sessionId };
+      return { status: "started", sessionId };
     } finally {
       if (began) {
         if (!success) {
@@ -412,6 +437,38 @@ export function createCodexTaskLaunchCoordinator({
     return created;
   }
 
+  async function createInput(task, input) {
+    const workspacePath = await resolveWorkspace(task, input);
+    if (!workspacePath || !path.isAbsolute(workspacePath)) {
+      throw new ApiError(
+        409,
+        "PROJECT_WORKSPACE_UNAVAILABLE",
+        `Project '${task.projectId}' has no available device workspace`,
+      );
+    }
+    const taskctlShim = await resolveTaskctlShim();
+    const quotedTaskctlShim = shellQuote(taskctlShim);
+    const quotedIdentifier = shellQuote(task.identifier);
+    const instruction = [
+      `处理任务 ${task.identifier}。`,
+      `本任务中的每一次 Taskboard 操作都使用 ${quotedTaskctlShim}；`,
+      `先运行 ${quotedTaskctlShim} issue brief ${quotedIdentifier} --json。`,
+    ].join(" ");
+    if (instruction.length > 1_024) {
+      throw new ApiError(
+        409,
+        "CODEX_INSTRUCTION_TOO_LONG",
+        "The native Codex task instruction exceeds 1,024 characters",
+      );
+    }
+    return {
+      workspacePath,
+      instruction,
+      skillPath,
+      presentation: input.presentation,
+    };
+  }
+
   async function run(input) {
     const task = await loadTask(input.taskId, input);
     if (!task) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${input.taskId}' does not exist`);
@@ -428,38 +485,25 @@ export function createCodexTaskLaunchCoordinator({
       throw new ApiError(409, "INVALID_AGENT_LAUNCH_STATE", "Codex auto-launch requires an in-progress task");
     }
 
+    if (input.trigger === "manual") {
+      const prepared = await serializedCreate(await createInput(task, input));
+      if (prepared.status !== "prepared") {
+        throw new Error("Codex manual task launch did not leave an editable prompt");
+      }
+      return {
+        status: "prepared",
+        agentKind: "codex",
+        task,
+      };
+    }
+
     let pending = unboundByTask.get(task.id);
     if (pending && pending.previousSessionId !== input.previousSessionId) pending = null;
     if (!pending) {
-      const workspacePath = await resolveWorkspace(task, input);
-      if (!workspacePath || !path.isAbsolute(workspacePath)) {
-        throw new ApiError(
-          409,
-          "PROJECT_WORKSPACE_UNAVAILABLE",
-          `Project '${task.projectId}' has no available device workspace`,
-        );
+      const created = await serializedCreate(await createInput(task, input));
+      if (created.status !== "started" || !created.sessionId) {
+        throw new Error("Codex automatic task launch did not create a session");
       }
-      const taskctlShim = await resolveTaskctlShim();
-      const quotedTaskctlShim = shellQuote(taskctlShim);
-      const quotedIdentifier = shellQuote(task.identifier);
-      const instruction = [
-        `e-taskboard 处理任务 ${task.identifier}。`,
-        `本任务中的每一次 Taskboard 操作都使用 ${quotedTaskctlShim}；`,
-        `先运行 ${quotedTaskctlShim} issue brief ${quotedIdentifier} --json。`,
-      ].join(" ");
-      if (instruction.length > 1_024) {
-        throw new ApiError(
-          409,
-          "CODEX_INSTRUCTION_TOO_LONG",
-          "The native Codex task instruction exceeds 1,024 characters",
-        );
-      }
-      const created = await serializedCreate({
-        workspacePath,
-        instruction,
-        skillPath,
-        presentation: input.presentation,
-      });
       pending = {
         sessionId: created.sessionId,
         previousSessionId: input.previousSessionId,
@@ -484,6 +528,7 @@ export function createCodexTaskLaunchCoordinator({
 
   return {
     launch(input) {
+      if (input.trigger === "manual") return run(input);
       const key = `${input.taskId}:${input.expectedVersion}`;
       if (launches.has(key)) return launches.get(key);
       const launch = run(input).catch((error) => {

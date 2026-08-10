@@ -1876,12 +1876,21 @@ export function createTaskboardServer(options = {}) {
         assertNoQuery(url.searchParams, "Native Codex task launch");
         const taskId = decodeRouteSegment(nativeCodexLaunchRoute[1], "Task id");
         const launch = parseNativeCodexLaunch(await readJson(request));
-        const result = await codexTaskLauncher.launch({
-          ...launch,
-          taskId,
-          cloud: Boolean(currentCloudConfig?.remoteUrl),
-          sourceRequest: request,
-        });
+        let result;
+        try {
+          result = await codexTaskLauncher.launch({
+            ...launch,
+            taskId,
+            cloud: Boolean(currentCloudConfig?.remoteUrl),
+            sourceRequest: request,
+          });
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          const detail = error instanceof Error && error.message.trim()
+            ? error.message.trim().slice(0, 1_000)
+            : "Codex 原生任务启动失败";
+          throw new ApiError(502, "CODEX_NATIVE_TASK_LAUNCH_FAILED", detail);
+        }
         return sendJson(response, 200, result);
       }
 

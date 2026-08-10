@@ -75,12 +75,18 @@ export interface TaskboardCapabilities {
   nativeCodexTaskLaunch: boolean;
 }
 
-export interface NativeCodexTaskLaunchResult {
-  status: "started";
-  agentKind: "codex";
-  sessionId: string;
-  task: Task;
-}
+export type NativeCodexTaskLaunchResult =
+  | {
+      status: "prepared";
+      agentKind: "codex";
+      task: Task;
+    }
+  | {
+      status: "started";
+      agentKind: "codex";
+      sessionId: string;
+      task: Task;
+    };
 
 export type AiChatSandbox = "read-only" | "workspace-write" | "danger-full-access";
 export type AiChatThreadStatus = "idle" | "running" | "failed";

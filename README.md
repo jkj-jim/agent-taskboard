@@ -93,7 +93,7 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 **自动启动 Agent。** 本机通过 `localhost` / `127.0.0.1` 打开的看板中，用户把 Codex Agent 负责的任务移入“进行中”，或在“进行中”改派给 Codex Agent 时，本地服务会在已经运行且挂载兼容注入器的 Codex 客户端中后台创建并提交原生任务。它不会启动或激活 Codex 应用，不会改变浏览器焦点，也不会降级为 `codex exec`；客户端或注入器未就绪时只保留任务状态并提示。Claude Agent 仍由看板现有的 CLI 适配器自动启动。
 
-**在对话中打开。** Codex Agent 会通过同一个本机桥创建原生 Codex 任务并写回真实任务 ID：嵌入看板会停留在新任务，同机普通浏览器会在创建成功后通过 `codex://` 将客户端路由到它。是否把已经运行的 Codex 窗口提到最前由客户端当前版本决定；Taskboard 不调用系统窗口激活接口。Claude Agent 继续走 `claude://code/new`，并把工作目录和预填指令一起带过去。远程 Cloud 页面不能直接控制桌面客户端，需要回到运行 Codex 的电脑操作。
+**在对话中打开。** 这是用户主动编辑入口：Codex Agent 会通过本机桥打开新的原生输入框，插入真实的 `$manage-taskboard` Skill mention 和任务指令，但不会自动发送。你可以修改或补充提示词，再自己点击发送。首次发送前 Codex 尚未生成正式会话 ID，因此看板不会提前绑定会话；Agent 后续通过 `taskctl` 写评论或任务时会自动记录当前会话。Claude Agent 继续走 `claude://code/new`，并把工作目录和预填指令一起带过去。远程 Cloud 页面不能直接控制桌面客户端，需要回到运行 Codex 的电脑操作。
 
 **在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此任务一开始就能关联和跳转。
 
@@ -151,9 +151,11 @@ npm run codex:inject -- --port 9229 --open
 
 该命令也会持续驻留，使注入后的标签页能在 Taskboard 服务退出后重启它。按 `Ctrl-C` 停止命令。
 
+驻留注入器会定期检查注入脚本的内容哈希；源码变化时在同一进程内重新挂载，不需要重启 watcher。`npm run build` 只刷新已经打开的 Taskboard iframe，不会再终止前台的 `codex:inject` 命令或把它替换成无日志后台进程。watcher 只连接 Codex 主窗口，不处理头像浮层、语音输入等辅助窗口；单次 CDP 心跳超时时会丢弃旧连接并自动重连，不让存活但失响的连接卡住整个循环。如果面板仍提示“注入器心跳已停止”，应回到终端确认 watcher 是否退出或持续报连接错误，再重新执行上面的命令。
+
 脚本会在 Codex 侧边栏中添加 Taskboard 入口，并让 iframe 覆盖 Codex 的完整主工作区，包括上下文标题栏区域，因此 Taskboard 自身的页头不会留下空白条带。完整的矩形页头位于 Electron 可拖拽层上方，并标记为 `no-drag`；由于激活 Taskboard 时会隐藏原生上下文操作，其自身操作可以使用正常的边缘内距，无需人为留出右侧空隙。原生侧边栏会保持挂载，之前选择的页面和上下文页头会暂时隐藏；选择其他 Codex 页面即可恢复。
 
-Codex 原生启动由本地 Taskboard 服务串行执行：服务连接已经运行且保有注入器心跳的客户端，切换任务对应的项目或 worktree，退出意外激活的 Plan mode，插入真实的 `$manage-taskboard` Skill mention 和任务指令，校验后提交，并把新生成的原生任务 ID 以 compare-and-set 方式写回任务。后台启动会恢复此前的 Codex 任务和 Taskboard；用户主动点击“在对话中打开”时才停留或跳转到新任务。浏览器只访问 loopback Taskboard API，不接触 CDP 端口；整个流程不会调用系统窗口激活接口，也不会启动第二个 app-server 或 `codex exec`。每个任务仍只能绑定一个 Git 分支或一个 worktree，可选项从所选 Codex 项目的仓库中扫描。
+Codex 原生启动由本地 Taskboard 服务串行执行：服务连接已经运行且保有注入器心跳的客户端，切换任务对应的项目或 worktree，退出意外激活的 Plan mode，并插入真实的 `$manage-taskboard` Skill mention 和任务指令。启动前只检查注入器、心跳、本机桥和侧栏；新对话输入框在导航后单独等待，避免把页面切换中的临时 DOM 缺失误报成不兼容。状态变更触发的后台派发会在校验后自动提交，把新生成的原生任务 ID 以 compare-and-set 方式写回任务，再恢复此前的 Codex 任务和 Taskboard；用户主动点击“在对话中打开”时只保留可编辑的预填内容，不提交也不提前绑定会话。浏览器只访问 loopback Taskboard API，不接触 CDP 端口；整个流程不会调用系统窗口激活接口，也不会启动第二个 app-server 或 `codex exec`。每个任务仍只能绑定一个 Git 分支或一个 worktree，可选项从所选 Codex 项目的仓库中扫描。
 
 如需使用其他 UI 源地址，请在用户脚本运行前设置 `window.__CODEX_TASKBOARD_URL__`。
 

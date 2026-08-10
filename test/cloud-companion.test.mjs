@@ -573,7 +573,7 @@ test("the local companion launches a native Codex task and binds it back to the 
       async inspect() { return { available: true }; },
       async createTask(input) {
         nativeLaunches.push(input);
-        return { sessionId };
+        return { status: "started", sessionId };
       },
     },
     remoteFetch: async (url, init) => {

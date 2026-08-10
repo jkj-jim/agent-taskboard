@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -20,8 +20,8 @@ import {
 import {
   findResidentInjectorPids,
   handleHostBindingPayload,
+  maintainHostHeartbeats,
   reconcileInjectionRuntime,
-  restartResidentInjector,
 } from "./codex-injector-runtime.mjs";
 import { readCodexQuotaStatus } from "./codex-rate-limits.mjs";
 
@@ -256,68 +256,6 @@ function startResidentInjector(
   });
   child.unref();
   return { pid: child.pid, started: true };
-}
-
-async function stopResidentInjector(pid) {
-  process.kill(pid, "SIGTERM");
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    } catch {
-      return;
-    }
-  }
-  throw new Error(`Timed out stopping resident Taskboard injector ${pid}`);
-}
-
-async function waitForResidentInjectorReady(port, pid, startupToken, expectedSourceHash) {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-      const targets = await codexTargets(port);
-      for (const target of targets) {
-        const cdp = new CdpConnection(target.webSocketDebuggerUrl);
-        await cdp.open();
-        try {
-          const readiness = await cdp.send("Runtime.evaluate", {
-            expression: `({
-              token: window[${JSON.stringify(hostStartupTokenName)}],
-              taskboardInjectionMounted: Boolean(window.__codexTaskboardInjection__),
-              sourceHash: window.__codexTaskboardInjection__?.sourceHash || null
-            })`,
-            returnByValue: true,
-          });
-          if (
-            readiness.result.value?.token === startupToken
-            && readiness.result.value.taskboardInjectionMounted
-            && readiness.result.value.sourceHash === expectedSourceHash
-          ) return;
-        } finally {
-          cdp.close();
-        }
-      }
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out waiting for resident Taskboard injector ${pid}`);
-}
-
-async function restartResidentInjectorForRefresh(port) {
-  const { sourceHash } = await currentInjectionSource();
-  return restartResidentInjector(port, {
-    findResidents: residentInjectorPids,
-    stopResident: stopResidentInjector,
-    createStartupToken: randomUUID,
-    startResident: (targetPort, startupToken) => (
-      startResidentInjector(targetPort, false, true, startupToken)
-    ),
-    waitUntilReady: (targetPort, pid, startupToken) => (
-      waitForResidentInjectorReady(targetPort, pid, startupToken, sourceHash)
-    ),
-  });
 }
 
 async function refreshTaskboardFrames(port) {
@@ -666,7 +604,6 @@ async function restoreQuotaPolicies(cdp) {
 async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
   const {
     instruction,
-    skillDisplayName,
     skillName,
     skillPath,
   } = request;
@@ -706,7 +643,7 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
     }
     if (prepared.result.value.matches) return { prefilled: true };
 
-    await cdp.send("Input.insertText", { text: "$" });
+    await cdp.send("Input.insertText", { text: `$${skillName}` });
     break;
   }
 
@@ -714,15 +651,15 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
   while (Date.now() < deadline) {
     const selection = await cdp.send("Runtime.evaluate", {
       expression: `(() => {
-        const displayName = ${JSON.stringify(skillDisplayName)};
         const overlay = Array.from(document.querySelectorAll(
           '[data-composer-overlay-floating-ui="true"]'
         )).find((candidate) => candidate.getClientRects().length > 0);
         if (!overlay) return { ready: false };
-        const button = Array.from(overlay.querySelectorAll(
+        const buttons = Array.from(overlay.querySelectorAll(
           'button[data-list-navigation-item="true"]'
-        )).find((candidate) => Array.from(candidate.querySelectorAll("span"))
-          .some((label) => (label.textContent || "").trim() === displayName));
+        ));
+        const button = buttons.find((candidate) => candidate.getAttribute("aria-selected") === "true")
+          || (buttons.length === 1 ? buttons[0] : null);
         if (!button) return { ready: true, found: false };
         button.click();
         return { ready: true, found: true };
@@ -737,7 +674,7 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
   if (!selectedSkill) {
-    throw new Error(`Timed out while selecting the ${skillDisplayName} Skill`);
+    throw new Error(`Timed out while selecting the ${skillName} Skill`);
   }
 
   let mentionReady = false;
@@ -762,7 +699,7 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
     });
     if (mention.result.value?.ready) {
       if (!mention.result.value.pathMatches) {
-        throw new Error(`Codex selected a different ${skillDisplayName} Skill`);
+        throw new Error(`Codex selected a different ${skillName} Skill`);
       }
       mentionReady = true;
       break;
@@ -770,7 +707,7 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
   if (!mentionReady) {
-    throw new Error(`Timed out while creating the ${skillDisplayName} Skill mention`);
+    throw new Error(`Timed out while creating the ${skillName} Skill mention`);
   }
 
   await cdp.send("Input.insertText", { text: instruction });
@@ -1101,7 +1038,6 @@ async function main() {
     const refreshed = [];
     for (const port of ports) {
       if (!(await isReachable(`http://127.0.0.1:${port}/json/version`))) continue;
-      if (options.refreshIfRunning) await restartResidentInjectorForRefresh(port);
       const results = await refreshTaskboardFrames(port);
       refreshed.push(...results.map((result) => ({ port, ...result })));
     }
@@ -1139,7 +1075,7 @@ async function main() {
       await waitUntilReachable(cdpVersionUrl, 30_000);
     }
 
-    const { source, sourceHash } = await currentInjectionSource();
+    let { source, sourceHash } = await currentInjectionSource();
     const injectedTargets = new Map();
     const firstResults = await injectAll(
       options.port,
@@ -1175,12 +1111,23 @@ async function main() {
       } catch (error) {
         console.error(`Waiting for Taskboard service: ${error.message}`);
       }
-      for (const connection of injectedTargets.values()) {
-        try {
-          await publishHostHeartbeat(connection, options.startupToken);
-        } catch (_) {}
-      }
+      await maintainHostHeartbeats({
+        connections: [...injectedTargets],
+        publish: (connection) => publishHostHeartbeat(connection, options.startupToken),
+        evict: (targetId, connection, error) => {
+          connection.close();
+          injectedTargets.delete(targetId);
+          console.error(`Reconnecting stale Codex renderer ${targetId}: ${error.message}`);
+        },
+      });
       try {
+        const latestInjection = await currentInjectionSource();
+        if (latestInjection.sourceHash !== sourceHash) {
+          injectedTargets.forEach((connection) => connection.close());
+          injectedTargets.clear();
+          source = latestInjection.source;
+          sourceHash = latestInjection.sourceHash;
+        }
         const results = await injectAll(
           options.port,
           source,
@@ -1190,7 +1137,7 @@ async function main() {
           injectedTargets,
           true,
           supervisor,
-          options.attachExisting,
+          true,
           options.startupToken,
         );
         if (results.length > 0) console.log(JSON.stringify({ injected: results }, null, 2));

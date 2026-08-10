@@ -4,8 +4,8 @@ import { test } from "node:test";
 import {
   findResidentInjectorPids,
   handleHostBindingPayload,
+  maintainHostHeartbeats,
   reconcileInjectionRuntime,
-  restartResidentInjector,
 } from "../scripts/codex-injector-runtime.mjs";
 
 const currentAutomationRequest = {
@@ -122,6 +122,30 @@ test("attach is idempotent for the same source hash and does not open a closed p
   ]);
 });
 
+test("a stalled CDP heartbeat is evicted without blocking the resident loop", async () => {
+  const healthy = { id: "healthy" };
+  const stalled = { id: "stalled" };
+  const evicted = [];
+  const failures = await maintainHostHeartbeats({
+    connections: [["main", healthy], ["old-renderer", stalled]],
+    publish: async (connection) => {
+      if (connection === stalled) await new Promise(() => {});
+    },
+    evict: async (targetId, connection, error) => {
+      evicted.push([targetId, connection, error.message]);
+    },
+    timeoutMs: 10,
+  });
+
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].targetId, "old-renderer");
+  assert.deepEqual(evicted, [[
+    "old-renderer",
+    stalled,
+    "CDP heartbeat timed out after 10 ms",
+  ]]);
+});
+
 test("resident discovery accepts this repository's absolute and relative launch forms only", () => {
   const projectRoot = "/workspace/codex-taskboard";
   const injectorPath = `${projectRoot}/scripts/codex-injector.mjs`;
@@ -157,31 +181,4 @@ test("resident discovery accepts this repository's absolute and relative launch 
     defaultPort: 9229,
     cwdForPid: (pid) => cwdByPid.get(pid) ?? null,
   }), [102, 105]);
-});
-
-test("refresh stops every stale resident before starting one token-verified replacement", async () => {
-  const calls = [];
-  const startupToken = "replacement-token";
-  const replacement = await restartResidentInjector(9231, {
-    findResidents: () => [4321, 5432],
-    stopResident: async (pid) => calls.push(["stop", pid]),
-    createStartupToken: () => startupToken,
-    startResident: (port, token) => {
-      calls.push(["start", port, token]);
-      return { pid: 9876, started: true };
-    },
-    waitUntilReady: async (port, pid, token) => calls.push(["ready", port, pid, token]),
-  });
-
-  assert.deepEqual(replacement, {
-    previousPids: [4321, 5432],
-    pid: 9876,
-    restarted: true,
-  });
-  assert.deepEqual(calls, [
-    ["stop", 4321],
-    ["stop", 5432],
-    ["start", 9231, startupToken],
-    ["ready", 9231, 9876, startupToken],
-  ]);
 });

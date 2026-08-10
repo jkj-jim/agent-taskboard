@@ -14,6 +14,10 @@ const desktopController = await readFile(
   new URL("../server/codex-desktop-controller.mjs", import.meta.url),
   "utf8",
 );
+const skillInterface = await readFile(
+  new URL("../skills/manage-taskboard/agents/openai.yaml", import.meta.url),
+  "utf8",
+);
 
 test("injection is an idempotent IIFE guarded by its current source hash", () => {
   assert.match(source, /^\(\(\) => \{/);
@@ -224,7 +228,7 @@ test("only a loopback Taskboard iframe can request native automation", () => {
   );
 });
 
-test("native Codex launches preserve background UI and submit a verified Skill prompt", () => {
+test("native Codex launches leave manual prompts editable and only auto-submit background work", () => {
   assert.match(source, /function beginNativeTaskLaunch\(presentation\)/);
   assert.match(source, /presentation === "foreground"/);
   assert.match(source, /revealNativeContentBehindTaskboard\(\)/);
@@ -234,8 +238,15 @@ test("native Codex launches preserve background UI and submit a verified Skill p
   assert.match(source, /requestHost\("prefill-task-composer"/);
   assert.match(desktopController, /type: 'electron-set-active-workspace-root'/);
   assert.match(desktopController, /label === 'plan' \|\| label === '计划'/);
+  assert.match(skillInterface, /display_name: "manage-taskboard"/);
   assert.match(desktopController, /skillName: "manage-taskboard"/);
+  assert.doesNotMatch(desktopController, /skillDisplayName/);
+  assert.doesNotMatch(source, /skillDisplayName/);
   assert.match(desktopController, /candidate\.getAttribute\('skill-mention-path'\) === skillPath/);
+  assert.match(
+    desktopController,
+    /if \(presentation === "foreground"\) \{\s*success = true;\s*return \{ status: "prepared" \};\s*\}[\s\S]*const submitted/,
+  );
   assert.match(desktopController, /submit\.click\(\)/);
   assert.match(desktopController, /CODEX_THREAD_ID\.test\(value\)/);
   assert.match(desktopController, /await restoreRoute\(cdp, snapshot\.activeThreadId\)/);

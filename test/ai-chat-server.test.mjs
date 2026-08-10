@@ -12,7 +12,7 @@ import { SKILL_MARKER } from "../server/agents/prompt.mjs";
 
 const execFile = promisify(execFileCallback);
 
-async function createServerFixture(host = "127.0.0.1") {
+async function createServerFixture(host = "127.0.0.1", overrides = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-server-"));
   const workspacePath = path.join(directory, "workspace");
   await mkdir(workspacePath);
@@ -77,17 +77,21 @@ if (args[0] === "auth" && args[1] === "status") {
     "local-projects": { local: { rootPaths: [workspace] } },
   }));
   const nativeLaunches = [];
-  const codexDesktopController = {
+  const defaultCodexDesktopController = {
     async inspect() {
       return { available: true };
     },
     async createTask(input) {
       nativeLaunches.push(input);
+      if (input.presentation === "foreground") return { status: "prepared" };
       return {
+        status: "started",
         sessionId: `00000000-0000-4000-8000-${String(nativeLaunches.length).padStart(12, "0")}`,
       };
     },
   };
+  const codexDesktopController = overrides.codexDesktopController
+    ?? defaultCodexDesktopController;
   const app = createTaskboardServer({
     dataDirectory: directory,
     claudeExecutable,
@@ -268,7 +272,7 @@ test("a user move into in progress is launched natively exactly once without cod
     const taskctlShim = path.join(fixture.directory, "bin", "taskctl");
     assert.match(
       fixture.nativeLaunches[0].instruction,
-      new RegExp(`^e-taskboard 处理任务 ${created.body.task.identifier}。`),
+      new RegExp(`^处理任务 ${created.body.task.identifier}。`),
     );
     assert.equal(fixture.nativeLaunches[0].instruction.includes(`'${taskctlShim}'`), true);
     assert.match(fixture.nativeLaunches[0].instruction, /每一次 Taskboard 操作都使用/);
@@ -331,6 +335,97 @@ test("a user move into in progress is launched natively exactly once without cod
     const afterAgentClaim = await request(fixture.baseUrl, "/api/local/ai/threads");
     assert.equal(afterAgentClaim.body.threads.length, 0);
     assert.equal(fixture.nativeLaunches.length, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a manual Codex launch prepares an editable prompt without binding or deduplicating it", async () => {
+  const fixture = await createServerFixture();
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Prepare this task for manual review",
+        status: "todo",
+        assigneeTarget: "codex-agent",
+      },
+    });
+    const launchBody = {
+      expectedVersion: created.body.task.version,
+      trigger: "manual",
+      presentation: "foreground",
+      previousSessionId: null,
+    };
+
+    const first = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      { method: "POST", body: launchBody },
+    );
+    const second = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      { method: "POST", body: launchBody },
+    );
+
+    assert.equal(first.response.status, 200);
+    assert.equal(first.body.status, "prepared");
+    assert.equal(first.body.sessionId, undefined);
+    assert.equal(first.body.task.version, created.body.task.version);
+    assert.equal(first.body.task.agentSessions, undefined);
+    assert.equal(second.body.status, "prepared");
+    assert.equal(fixture.nativeLaunches.length, 2);
+    assert.deepEqual(
+      fixture.nativeLaunches.map((launch) => launch.presentation),
+      ["foreground", "foreground"],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("native Codex launch failures return the actionable injector error", async () => {
+  const fixture = await createServerFixture("127.0.0.1", {
+    codexDesktopController: {
+      async inspect() {
+        return { available: true };
+      },
+      async createTask() {
+        throw new Error("Timed out while selecting the manage-taskboard Skill");
+      },
+    },
+  });
+  try {
+    const created = await request(fixture.baseUrl, "/api/tasks", {
+      method: "POST",
+      body: {
+        projectId: "local",
+        title: "Expose native launch failure",
+        status: "todo",
+        assigneeTarget: "codex-agent",
+      },
+    });
+    const launched = await request(
+      fixture.baseUrl,
+      `/api/local/codex/tasks/${created.body.task.id}/launch`,
+      {
+        method: "POST",
+        body: {
+          expectedVersion: created.body.task.version,
+          trigger: "manual",
+          presentation: "foreground",
+          previousSessionId: null,
+        },
+      },
+    );
+    assert.equal(launched.response.status, 502);
+    assert.equal(launched.body.error.code, "CODEX_NATIVE_TASK_LAUNCH_FAILED");
+    assert.equal(
+      launched.body.error.message,
+      "Timed out while selecting the manage-taskboard Skill",
+    );
   } finally {
     await fixture.close();
   }

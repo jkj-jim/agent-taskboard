@@ -15,6 +15,7 @@
 | 方式 | 触发 | 会话 | 任务认领 |
 |---|---|---|---|
 | 用户派发 | 用户把已分配给 Agent 的任务移入 `in_progress`，或在 `in_progress` 改派 Agent | 每次自动启动一个新会话 | 用户已经完成状态变更，Agent 不重复 `move in_progress` |
+| 在对话中打开 | 用户在任务详情或菜单中主动点击 | 只打开新会话输入框并预填可编辑指令；用户确认后自行发送 | 未发送前不产生正式会话 ID，也不提前绑定任务 |
 | 定时认领 | Codex 自动化定期查看项目的 `todo` | 每次运行按自动化规则执行 | 先选一个候选，再用最新 `version` 原子认领；冲突就跳过 |
 | 看板 AI 面板 | 用户在看板内新建或继续 Codex / Claude 对话 | 同一面板任务可续写原会话 | 只有明确绑定某个看板任务时才操作其状态 |
 
@@ -98,8 +99,14 @@ taskctl issue list --project PROJECT_ID --all-statuses --full --json
 1. 在实际监听端口确定后保存当前服务 origin。
 2. 懒创建一份服务实例唯一的 `.data/bin/taskctl` shim。
 3. 在 shim 中写入 Node、CLI 和当前服务地址的绝对值，并强制覆盖遗留的 `CODEX_TASKBOARD_URL`。
-4. 启动原生 Codex 任务前确保 shim 已就绪。
-5. 在单行启动指令中要求整轮 Taskboard 操作都使用该 shim，并先运行 `issue brief`。
+4. 打开原生 Codex 输入框前确保 shim 已就绪。
+5. 在单行指令中要求整轮 Taskboard 操作都使用该 shim，并先运行 `issue brief`。
+
+用户主动点击“在对话中打开”时，Taskboard 只切换到新的 Codex 输入框并插入真实 Skill mention 和指令，不点击发送。用户可以补充或修改提示词，再自行发送。等待输入框、Skill 菜单和 mention 就绪时会有很短的技术等待，但没有产品倒计时。
+
+状态变更触发的后台派发属于自动执行路径：验证提示词后立即发送，捕获新会话 ID、绑定任务，再恢复用户之前所在的 Codex 页面。两条路径共用相同的 shim 和任务指令，但只有后台派发自动发送。
+
+`codex:inject` watcher 每两秒续一次本机桥心跳，并检查注入脚本的内容哈希。它只连接 Codex 主窗口，过滤带 `initialRoute` 的头像浮层、语音输入等辅助页面；心跳请求在 1.5 秒内无响应时丢弃该 CDP 连接，下一轮自动重连，避免 watcher 进程存活却心跳循环被永久卡住。脚本变化时由同一个 watcher 关闭旧 CDP 连接并重新挂载当前源码；`npm run build` 只刷新 iframe，不终止或替换前台 watcher。原生启动的前置检查不要求当前页面已经存在新对话输入框，导航完成后再单独等待它；心跳、桥接或侧栏缺失时返回具体原因，不再统一报“injector or native DOM”。
 
 AI 面板、Codex 子进程和 Claude 子进程共享同一份 memoized shim 初始化，避免并发覆盖或出现半截文件。随机端口和非默认端口也会连接当前服务，而不是回退到 47823。
 
@@ -138,6 +145,7 @@ AI 面板、Codex 子进程和 Claude 子进程共享同一份 memoized shim 初
 - 每次写任务前使用最新读取到的 `version` 和 `--if-version`。
 - 定时认领发生版本冲突或状态已变化时立即跳过，避免多个 Agent 抢同一任务。
 - 会话绑定可能更新任务版本，因此启动指令不携带容易立即过期的 `version`。
+- 手动预填阶段没有正式会话 ID，不更新任务版本或会话绑定；用户发送后，Agent 首次通过 `taskctl` 写评论或任务时会记录当前会话。
 - 新一轮返工写新评论，不覆盖旧轮次交接。
 - Agent 自验后写交付评论，再读取最新版本并移动到 `in_review`。
 

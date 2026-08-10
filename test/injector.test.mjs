@@ -27,10 +27,13 @@ test("the CDP bridge accepts only service ensure and native Skill composer prefi
   assert.match(runtimeSource, /request\.action === "prefill-task-composer"/);
   assert.match(runtimeSource, /request\.instruction\.length <= 1_024/);
   assert.match(runtimeSource, /request\.skillPath\.length <= 1_024/);
+  assert.doesNotMatch(runtimeSource, /skillDisplayName/);
   assert.match(source, /function prefillTaskComposerViaCdp/);
-  assert.match(source, /cdp\.send\("Input\.insertText", \{ text: "\$" \}\)/);
+  assert.doesNotMatch(source, /skillDisplayName/);
+  assert.match(source, /cdp\.send\("Input\.insertText", \{ text: `\$\$\{skillName\}` \}\)/);
   assert.match(source, /data-composer-overlay-floating-ui/);
   assert.match(source, /button\[data-list-navigation-item="true"\]/);
+  assert.match(source, /getAttribute\("aria-selected"\) === "true"/);
   assert.match(source, /\[skill-mention-name\]/);
   assert.match(source, /skill-mention-path/);
   assert.match(source, /cdp\.send\("Input\.insertText", \{ text: instruction \}\)/);
@@ -83,7 +86,9 @@ test("attach reconciles the renderer against a hashed current injection source",
 });
 
 test("the injector ignores auxiliary Codex windows", () => {
-  assert.match(cdpSource, /!target\.url\?\.includes\("initialRoute=%2Fglobal-dictation"\)/);
+  assert.match(cdpSource, /!target\.url\?\.includes\("initialRoute="\)/);
+  assert.match(source, /maintainHostHeartbeats/);
+  assert.match(source, /Reconnecting stale Codex renderer/);
 });
 
 test("a completed web build refreshes an already-open Codex iframe", () => {
@@ -94,7 +99,17 @@ test("a completed web build refreshes an already-open Codex iframe", () => {
   assert.match(cdpSource, /--remote-debugging-port=/);
   assert.match(source, /taskboard\.reloadFrame\(\)/);
   assert.match(source, /__codex_taskboard_refresh/);
-  assert.match(source, /await restartResidentInjectorForRefresh\(port\)/);
+  assert.doesNotMatch(source, /restartResidentInjectorForRefresh/);
+  assert.doesNotMatch(source, /process\.kill\(pid, "SIGTERM"\)/);
+});
+
+test("the resident injector hot-reloads its source without replacing the watcher", () => {
+  assert.match(source, /let \{ source, sourceHash \} = await currentInjectionSource\(\)/);
+  assert.match(source, /latestInjection\.sourceHash !== sourceHash/);
+  assert.match(source, /injectedTargets\.forEach\(\(connection\) => connection\.close\(\)\)/);
+  assert.match(source, /injectedTargets\.clear\(\)/);
+  assert.match(source, /source = latestInjection\.source/);
+  assert.match(source, /sourceHash = latestInjection\.sourceHash/);
 });
 
 test("the injected iframe follows the configured local service port", () => {

@@ -38,9 +38,6 @@ function parseHostRequest(payload, parseAutomationRequest) {
     && request.instruction.length <= 1_024
     && typeof request.skillName === "string"
     && /^[a-z0-9][a-z0-9-]{0,79}$/i.test(request.skillName)
-    && typeof request.skillDisplayName === "string"
-    && request.skillDisplayName.length > 0
-    && request.skillDisplayName.length <= 120
     && typeof request.skillPath === "string"
     && request.skillPath.length > 0
     && request.skillPath.length <= 1_024
@@ -111,6 +108,36 @@ export async function reconcileInjectionRuntime({
   return { replaced, scriptIdentifier, shouldRemainOpen };
 }
 
+export async function maintainHostHeartbeats({
+  connections,
+  publish,
+  evict,
+  timeoutMs = 1_500,
+}) {
+  const failures = [];
+  for (const [targetId, connection] of connections) {
+    let timeout;
+    try {
+      await Promise.race([
+        publish(connection),
+        new Promise((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`CDP heartbeat timed out after ${timeoutMs} ms`)),
+            timeoutMs,
+          );
+          timeout.unref?.();
+        }),
+      ]);
+    } catch (error) {
+      failures.push({ targetId, error });
+      await evict(targetId, connection, error);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return failures;
+}
+
 export function findResidentInjectorPids({
   processList,
   currentPid,
@@ -138,21 +165,6 @@ export function findResidentInjectorPids({
     residents.push(pid);
   }
   return residents;
-}
-
-export async function restartResidentInjector(port, handlers) {
-  const previousPids = handlers.findResidents(port);
-  if (previousPids.length === 0) return { previousPids: [], pid: null, restarted: false };
-
-  for (const pid of previousPids) await handlers.stopResident(pid);
-  const startupToken = handlers.createStartupToken();
-  const started = handlers.startResident(port, startupToken);
-  await handlers.waitUntilReady(port, started.pid, startupToken);
-  return {
-    previousPids,
-    pid: started.pid,
-    restarted: true,
-  };
 }
 
 function commandPort(command, defaultPort) {

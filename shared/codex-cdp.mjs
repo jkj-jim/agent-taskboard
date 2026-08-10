@@ -110,7 +110,7 @@ export async function codexTargets(port, fetchImplementation = globalThis.fetch)
     (target) =>
       target.type === "page"
       && target.webSocketDebuggerUrl
-      && !target.url?.includes("initialRoute=%2Fglobal-dictation")
+      && !target.url?.includes("initialRoute=")
       && (target.url?.startsWith("app://") || target.title === "Codex"),
   );
 }

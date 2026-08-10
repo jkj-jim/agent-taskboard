@@ -655,9 +655,6 @@
     const identifier = typeof payload?.identifier === "string" ? payload.identifier.trim() : "";
     const instruction = typeof payload?.instruction === "string" ? payload.instruction.trim() : "";
     const skillName = typeof payload?.skillName === "string" ? payload.skillName.trim() : "";
-    const skillDisplayName = typeof payload?.skillDisplayName === "string"
-      ? payload.skillDisplayName.trim()
-      : "";
     const skillPath = typeof payload?.skillPath === "string" ? payload.skillPath.trim() : "";
     const workspacePath = typeof payload?.workspacePath === "string"
       ? payload.workspacePath.trim()
@@ -667,7 +664,6 @@
       || !identifier
       || !instruction
       || !skillName
-      || !skillDisplayName
       || !skillPath
       || pendingThreadCreation
     ) return;
@@ -712,7 +708,6 @@
       });
       await requestHostTaskComposerPrefill({
         instruction,
-        skillDisplayName,
         skillName,
         skillPath,
       });
@@ -1034,13 +1029,11 @@
 
   function requestHostTaskComposerPrefill({
     instruction,
-    skillDisplayName,
     skillName,
     skillPath,
   }) {
     return requestHost("prefill-task-composer", {
       instruction,
-      skillDisplayName,
       skillName,
       skillPath,
     });
