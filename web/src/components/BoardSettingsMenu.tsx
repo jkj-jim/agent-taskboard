@@ -1,20 +1,27 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { AGENTS } from "../../../shared/agents.mjs";
+import type { AssigneeTarget } from "../types";
 import { LinearIcon } from "./LinearIcon";
 
 interface BoardSettingsMenuProps {
   showEmptyColumns: boolean;
+  defaultAssigneeTarget: AssigneeTarget;
   onShowEmptyColumnsChange: (show: boolean) => void;
+  onDefaultAssigneeTargetChange: (target: AssigneeTarget) => void;
 }
 
 export function BoardSettingsMenu({
   showEmptyColumns,
+  defaultAssigneeTarget,
   onShowEmptyColumnsChange,
+  onDefaultAssigneeTargetChange,
 }: BoardSettingsMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
+  const hasCustomSettings = showEmptyColumns || defaultAssigneeTarget !== "current-user";
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current || !menuRef.current) return;
@@ -79,11 +86,11 @@ export function BoardSettingsMenu({
       onKeyDown={(event) => {
         if (event.key === "Tab") {
           event.preventDefault();
-          const switches = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>("[role='switch']") ?? [])]
-            .filter((button) => !button.disabled);
-          const currentIndex = switches.indexOf(document.activeElement as HTMLButtonElement);
+          const controls = [...(menuRef.current?.querySelectorAll<HTMLElement>("[role='switch'], select") ?? [])]
+            .filter((control) => !(control instanceof HTMLButtonElement || control instanceof HTMLSelectElement) || !control.disabled);
+          const currentIndex = controls.indexOf(document.activeElement as HTMLElement);
           const offset = event.shiftKey ? -1 : 1;
-          switches[(currentIndex + offset + switches.length) % switches.length]?.focus();
+          controls[(currentIndex + offset + controls.length) % controls.length]?.focus();
         }
       }}
     >
@@ -102,6 +109,20 @@ export function BoardSettingsMenu({
             <span className="sr-only">{showEmptyColumns ? "关闭显示空列" : "开启显示空列"}</span>
           </button>
         </div>
+        <label className="board-setting-row">
+          <span>默认负责人</span>
+          <select
+            className="board-setting-select"
+            aria-label="默认负责人"
+            value={defaultAssigneeTarget}
+            onChange={(event) => onDefaultAssigneeTargetChange(event.target.value as AssigneeTarget)}
+          >
+            <option value="current-user">自己</option>
+            {AGENTS.map((agent) => (
+              <option value={agent.assigneeTarget} key={agent.assigneeTarget}>{agent.label}</option>
+            ))}
+          </select>
+        </label>
       </section>
     </div>,
     document.body,
@@ -112,7 +133,7 @@ export function BoardSettingsMenu({
       <button
         ref={triggerRef}
         type="button"
-        className={`board-settings-trigger${open ? " is-open" : ""}${showEmptyColumns ? " is-active" : ""}`}
+        className={`board-settings-trigger${open ? " is-open" : ""}${hasCustomSettings ? " is-active" : ""}`}
         aria-label="看板设置"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -125,7 +146,7 @@ export function BoardSettingsMenu({
         }}
       >
         <LinearIcon name="displayOptions" />
-        {showEmptyColumns && <span className="board-settings-active-dot" aria-hidden="true" />}
+        {hasCustomSettings && <span className="board-settings-active-dot" aria-hidden="true" />}
       </button>
       {menu}
     </>

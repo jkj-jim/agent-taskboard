@@ -58,6 +58,7 @@ interface TaskEditorProps {
   labels: string[];
   workflows: WorkflowOption[];
   currentUser: ActorIdentity;
+  defaultAssignee: ActorIdentity;
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
   onCancel: () => void;
@@ -107,6 +108,7 @@ export function TaskEditor({
   labels: availableLabels,
   workflows,
   currentUser,
+  defaultAssignee,
   developmentScan,
   developmentScanLoading,
   onCancel,
@@ -122,7 +124,7 @@ export function TaskEditor({
   );
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? initialStatus);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "none");
-  const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? currentUser);
+  const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? defaultAssignee);
   const [selectedLabels, setSelectedLabels] = useState<string[]>(task?.labels ?? []);
   const [workflowId, setWorkflowId] = useState(task?.workflowId ?? "");
   const [developmentContext, setDevelopmentContext] = useState<DevelopmentContext | null>(task?.developmentContext ?? null);

@@ -1348,6 +1348,24 @@ kbd {
   font-weight: 500;
 }
 
+.board-setting-select {
+  min-width: 104px;
+  height: 28px;
+  padding: 0 7px;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+}
+
+.board-setting-select:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
 .board-setting-copy {
   display: flex;
   flex-direction: column;

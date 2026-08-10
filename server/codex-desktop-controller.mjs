@@ -196,6 +196,121 @@ async function restoreRoute(cdp, threadId) {
   );
 }
 
+async function renameNativeThread(cdp, threadId, title) {
+  const escapedThreadId = JSON.stringify(threadId);
+  const escapedTitle = JSON.stringify(title);
+  await waitForValue(
+    () => evaluate(cdp, `(() => {
+      const normalize = (value) => String(value || '').trim().replace(/^(?:local|cloud):/i, '');
+      const conversationId = (row) => {
+        const exposed = normalize(row?.getAttribute('data-app-action-sidebar-thread-id'));
+        if (/^[0-9a-f-]{36}$/i.test(exposed)) return exposed;
+        const fiberKey = Object.getOwnPropertyNames(row || {})
+          .find((key) => key.startsWith('__reactFiber$'));
+        let fiber = fiberKey ? row[fiberKey] : null;
+        for (let depth = 0; fiber && depth < 12; depth += 1, fiber = fiber.return) {
+          for (const props of [fiber.pendingProps, fiber.memoizedProps]) {
+            const direct = normalize(props?.conversationId);
+            if (/^[0-9a-f-]{36}$/i.test(direct)) return direct;
+            const tooltip = normalize(props?.tooltipContent?.props?.children?.props?.conversationId);
+            if (/^[0-9a-f-]{36}$/i.test(tooltip)) return tooltip;
+          }
+        }
+        return exposed;
+      };
+      const row = Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-id]'))
+        .find((candidate) => conversationId(candidate) === ${escapedThreadId});
+      const titleTarget = row?.querySelector('[data-thread-title]');
+      if (!row || !titleTarget) return false;
+      const fiberKey = Object.getOwnPropertyNames(row).find((key) => key.startsWith('__reactFiber$'));
+      let fiber = fiberKey ? row[fiberKey] : null;
+      for (let depth = 0; fiber && depth < 8; depth += 1, fiber = fiber.return) {
+        const props = fiber.memoizedProps;
+        if (typeof props?.onDoubleClick !== 'function') continue;
+        props.onDoubleClick({
+          currentTarget: row,
+          target: titleTarget,
+          defaultPrevented: false,
+          detail: 2,
+          preventDefault() { this.defaultPrevented = true; },
+          stopPropagation() {},
+        });
+        return true;
+      }
+      return false;
+    })()`),
+    Boolean,
+    "Codex did not expose the native chat rename action",
+  );
+  await waitForValue(
+    () => evaluate(cdp, `Boolean(document.querySelector(
+      'input[aria-label="聊天标题"], input[aria-label="Chat title"]'
+    ))`),
+    Boolean,
+    "Codex native chat rename dialog did not become ready",
+  );
+  const filled = await evaluate(cdp, `(() => {
+    const input = document.querySelector(
+      'input[aria-label="聊天标题"], input[aria-label="Chat title"]'
+    );
+    if (!input) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, ${escapedTitle});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  if (!filled) throw new Error("Codex native chat title could not be entered");
+  await waitForValue(
+    () => evaluate(cdp, `Boolean(Array.from(document.querySelectorAll('button')).find((button) => {
+      const label = String(button.getAttribute('aria-label') || button.textContent || '').trim().toLowerCase();
+      return !button.disabled
+        && button.getClientRects().length > 0
+        && (label === '保存' || label === 'save');
+    }))`),
+    Boolean,
+    "Codex native chat title was not accepted",
+  );
+  const saved = await evaluate(cdp, `(() => {
+    const save = Array.from(document.querySelectorAll('button')).find((button) => {
+      const label = String(button.getAttribute('aria-label') || button.textContent || '').trim().toLowerCase();
+      return !button.disabled
+        && button.getClientRects().length > 0
+        && (label === '保存' || label === 'save');
+    });
+    if (!save) return false;
+    save.click();
+    return true;
+  })()`);
+  if (!saved) throw new Error("Codex native chat rename could not be saved");
+  await waitForValue(
+    () => evaluate(cdp, `(() => {
+      const normalize = (value) => String(value || '').trim().replace(/^(?:local|cloud):/i, '');
+      const conversationId = (row) => {
+        const exposed = normalize(row?.getAttribute('data-app-action-sidebar-thread-id'));
+        if (/^[0-9a-f-]{36}$/i.test(exposed)) return exposed;
+        const fiberKey = Object.getOwnPropertyNames(row || {})
+          .find((key) => key.startsWith('__reactFiber$'));
+        let fiber = fiberKey ? row[fiberKey] : null;
+        for (let depth = 0; fiber && depth < 12; depth += 1, fiber = fiber.return) {
+          for (const props of [fiber.pendingProps, fiber.memoizedProps]) {
+            const direct = normalize(props?.conversationId);
+            if (/^[0-9a-f-]{36}$/i.test(direct)) return direct;
+            const tooltip = normalize(props?.tooltipContent?.props?.children?.props?.conversationId);
+            if (/^[0-9a-f-]{36}$/i.test(tooltip)) return tooltip;
+          }
+        }
+        return exposed;
+      };
+      const row = Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-id]'))
+        .find((candidate) => conversationId(candidate) === ${escapedThreadId});
+      return row?.getAttribute('data-app-action-sidebar-thread-title') === ${escapedTitle};
+    })()`),
+    Boolean,
+    "Codex did not apply the native chat title",
+  );
+}
+
 export function createCodexDesktopController(options = {}) {
   const connect = options.connect ?? (() => defaultConnect(options));
 
@@ -218,7 +333,7 @@ export function createCodexDesktopController(options = {}) {
     }
   }
 
-  async function createTask({ workspacePath, instruction, skillPath, presentation }) {
+  async function createTask({ workspacePath, instruction, skillPath, presentation, title }) {
     if (!path.isAbsolute(workspacePath)) {
       throw new Error("Codex workspace path must be absolute");
     }
@@ -395,6 +510,7 @@ export function createCodexDesktopController(options = {}) {
         30_000,
       );
 
+      await renameNativeThread(cdp, sessionId, title);
       await restoreRoute(cdp, snapshot.activeThreadId);
       success = true;
       return { status: "started", sessionId };
@@ -464,6 +580,7 @@ export function createCodexTaskLaunchCoordinator({
     return {
       workspacePath,
       instruction,
+      title: task.title,
       skillPath,
       presentation: input.presentation,
     };

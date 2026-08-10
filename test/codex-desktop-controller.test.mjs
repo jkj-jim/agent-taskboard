@@ -13,6 +13,7 @@ function task(id, version = 1) {
   return {
     id,
     identifier: `TEST-${id}`,
+    title: `Task title ${id}`,
     projectId: "project",
     status: "in_progress",
     version,
@@ -87,6 +88,20 @@ test("native task capture resolves the canonical conversation id behind optimist
   assert.match(source, /knownSidebarRowIds/);
   assert.match(source, /createdSidebarRowId/);
   assert.match(source, /CODEX_THREAD_ID\.test\(value\) && !knownThreadIds\.has\(value\)/);
+});
+
+test("native task creation renames the new Codex chat from the task title without an AI turn", async () => {
+  const source = await readFile(new URL("../server/codex-desktop-controller.mjs", import.meta.url), "utf8");
+  assert.match(source, /async function renameNativeThread\(cdp, threadId, title\)/);
+  assert.match(source, /data-thread-title/);
+  assert.match(source, /conversationId\(candidate\) === \$\{escapedThreadId\}/);
+  assert.match(source, /tooltipContent\?\.props\?\.children\?\.props\?\.conversationId/);
+  assert.doesNotMatch(source, /replace\(\/\^\(\?:local\|cloud\):\(\?:client-new-thread:/);
+  assert.match(source, /input\[aria-label=.*聊天标题/);
+  assert.match(source, /Codex native chat title was not accepted/);
+  assert.match(source, /!button\.disabled/);
+  assert.match(source, /title: task\.title/);
+  assert.match(source, /await renameNativeThread\(cdp, sessionId, title\)/);
 });
 
 test("native launch readiness separates the live injector from the post-navigation composer", async () => {
@@ -233,6 +248,7 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
     createInput.instruction,
     /先运行 '\/tmp\/taskboard'\\''s bin\/taskctl' issue brief 'TEST-quoted' --json。$/,
   );
+  assert.equal(createInput.title, current.title);
   assert.ok(createInput.instruction.length <= 1_024);
 });
 

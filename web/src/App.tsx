@@ -18,6 +18,7 @@ import {
   type AutomationModel,
   type AutomationReasoningEffort,
 } from "../../shared/taskboard-automation-options.mjs";
+import { isAssigneeTarget } from "../../shared/agents.mjs";
 import {
   ApiError,
   addTaskRelation,
@@ -77,6 +78,7 @@ import {
   TASK_STATUSES,
   type ActorIdentity,
   type AgentKind,
+  type AssigneeTarget,
   type DevelopmentScan,
   type HostContext,
   type IssueRelationType,
@@ -203,6 +205,7 @@ const LAST_PROJECT_KEY = "taskboard.lastProjectId";
 const FAVORITE_PROJECTS_KEY = "taskboard.favoriteProjectIds";
 const DEVICE_WORKSPACE_PATHS_KEY = "taskboard.deviceWorkspacePaths.v1";
 const SHOW_EMPTY_COLUMNS_KEY = "taskboard.showEmptyColumns.v1";
+const DEFAULT_ASSIGNEE_TARGET_KEY = "taskboard.defaultAssigneeTarget.v1";
 const COLUMN_VISIBILITY_KEY = "taskboard.columnVisibility.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
 const DEFAULT_AUTOMATION_OPTIONS = {
@@ -264,6 +267,11 @@ function readDeviceWorkspacePaths(): Record<string, string> {
 
 function readShowEmptyColumns(): boolean {
   return window.localStorage.getItem(SHOW_EMPTY_COLUMNS_KEY) === "true";
+}
+
+function readDefaultAssigneeTarget(): AssigneeTarget {
+  const stored = window.localStorage.getItem(DEFAULT_ASSIGNEE_TARGET_KEY);
+  return isAssigneeTarget(stored) ? stored : "current-user";
 }
 
 function readProjectAutomations(): ProjectAutomations {
@@ -572,6 +580,7 @@ export function App() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(readTaskFilters);
   const [showEmptyColumns, setShowEmptyColumns] = useState(readShowEmptyColumns);
+  const [defaultAssigneeTarget, setDefaultAssigneeTarget] = useState(readDefaultAssigneeTarget);
   const [columnVisibilityByProject, setColumnVisibilityByProject] = useState(readColumnVisibilityByProject);
   const [boardView, setBoardView] = useState<BoardView>("issues");
   const [editor, setEditor] = useState<EditorState | null>(null);
@@ -633,6 +642,7 @@ export function App() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
   const currentUser = hostContext?.user ?? DEFAULT_USER_ACTOR;
+  const defaultAssignee = actorForAssigneeTarget(defaultAssigneeTarget, currentUser);
   const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId];
   const selectedProjectAutomation = projectAutomations[selectedProjectId];
   const automationProjectContext = useMemo(() => {
@@ -1394,6 +1404,11 @@ export function App() {
   function updateShowEmptyColumns(show: boolean) {
     window.localStorage.setItem(SHOW_EMPTY_COLUMNS_KEY, String(show));
     setShowEmptyColumns(show);
+  }
+
+  function updateDefaultAssigneeTarget(target: AssigneeTarget) {
+    window.localStorage.setItem(DEFAULT_ASSIGNEE_TARGET_KEY, target);
+    setDefaultAssigneeTarget(target);
   }
 
   function updateColumnVisibility(status: TaskStatus, visible: boolean) {
@@ -2184,7 +2199,9 @@ export function App() {
             />
             <BoardSettingsMenu
               showEmptyColumns={showEmptyColumns}
+              defaultAssigneeTarget={defaultAssigneeTarget}
               onShowEmptyColumnsChange={updateShowEmptyColumns}
+              onDefaultAssigneeTargetChange={updateDefaultAssigneeTarget}
             />
             {(search || activeFilterCount > 0) && (
               <button
@@ -2419,6 +2436,7 @@ export function App() {
           labels={availableLabels}
           workflows={workflowOptions}
           currentUser={currentUser}
+          defaultAssignee={defaultAssignee}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}
           onCancel={() => setEditor(null)}
