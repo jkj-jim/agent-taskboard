@@ -112,41 +112,24 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 ## 嵌入 Codex
 
-### 推荐方式：保留当前窗口，另开一个 Taskboard 窗口
+### 推荐方式：一条命令打开独立的 Taskboard 窗口
 
-保持现有 Codex 窗口打开。在 Taskboard 仓库中，以专用 CDP 端口启动第二个 Codex 实例：
-
-```bash
-open -n -a /Applications/ChatGPT.app --args \
-  --remote-debugging-port=9231 \
-  --remote-allow-origins=http://127.0.0.1:9231
-```
-
-新 Codex 窗口出现后，在另一个终端运行注入器：
+保持现有 Codex 窗口打开，在 Taskboard 仓库中运行：
 
 ```bash
-CODEX_TASKBOARD_HOST=127.0.0.1 \
-npm run codex:inject -- --port 9231 --open
+npm run codex
 ```
 
-使用嵌入面板期间请保持注入器终端运行。原 Codex 窗口不会受到影响，新窗口中会出现 Taskboard 侧边栏入口。如果端口 `9231` 已被占用，请在两条命令中改用同一个其他端口。
-
-### 替代方式：使用独立启动器重启 Codex
-
-退出所有正在运行的 Codex 窗口，然后运行：
-
-```bash
-CODEX_TASKBOARD_HOST=127.0.0.1 npm run codex
-```
-
-该命令会在需要时启动本地 Taskboard 服务，使用仅监听回环地址的 CDP 端口启动官方 macOS Codex 应用，在 Plugins 后注入一个原生风格的 Taskboard 入口，并持续监控服务和替换后的渲染器。打开 Taskboard 时，启动器会对固定的本地服务执行健康检查，在需要时重启服务，并重建加载失败的 iframe。使用嵌入面板期间请保持该命令运行。启动器不会修改 `ChatGPT.app` 或其中的 `app.asar`。
+该命令会在需要时把本地 Taskboard 服务启动在回环地址，通过专用 CDP 端口 `9231` 新开一个官方 macOS Codex 实例，完成注入并直接显示 Taskboard。无需退出已经打开的普通 Codex：启动器使用 `.data/codex-user-data` 隔离 Electron 的单实例锁，同时继续读取同一份 Codex 账号、项目和任务数据；原窗口及其中的会话不会关闭或改变。若 `9231` 上已经有这个可调试实例，启动器会直接复用。冷启动时会在统一时间窗内等待同一组主 renderer 持续稳定；如果注入期间发生 frame swap 或 WebSocket 替换，则重新等待新 renderer 后继续，不需要再次运行命令。之后还会持续监控服务和替换后的渲染器，在需要时重启服务并重建加载失败的 iframe。使用嵌入面板期间请保持该命令运行；按 `Ctrl-C` 会停止监控并关闭本次启动的独立 Codex，原 Codex 不受影响。启动器不会修改 `ChatGPT.app` 或其中的 `app.asar`。
 
 Codex 26.715.52143 自带的渲染器 CSP 会阻止任意 HTTP iframe。因此，启动器会启用 CDP CSP 绕过，重新加载该渲染器一次，安装 document-start 脚本，并等待 Taskboard OOPIF 真正加载完成。CDP 对同一台机器上的其他进程不设身份验证，因此启动器运行期间只应运行可信的本地代码。
 
-如需向已通过其他方式启用 CDP 的 Codex 实例注入，请运行：
+### 高级方式：连接手动启用 CDP 的 Codex
+
+如需使用其他端口，先自行用相同端口启动 Codex，再运行：
 
 ```bash
-npm run codex:inject -- --port 9229 --open
+npm run codex:inject -- --port <端口> --open
 ```
 
 该命令也会持续驻留，使注入后的标签页能在 Taskboard 服务退出后重启它。按 `Ctrl-C` 停止命令。

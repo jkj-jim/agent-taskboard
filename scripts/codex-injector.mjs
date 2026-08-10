@@ -22,12 +22,14 @@ import {
   handleHostBindingPayload,
   maintainHostHeartbeats,
   reconcileInjectionRuntime,
+  waitForStableTargetSet,
 } from "./codex-injector-runtime.mjs";
 import { readCodexQuotaStatus } from "./codex-rate-limits.mjs";
 
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
 const defaultCodexDebuggingPort = DEFAULT_CODEX_DEBUGGING_PORT;
+const launcherCodexUserDataPath = path.join(projectRoot, ".data", "codex-user-data");
 const injectionPath = path.join(projectRoot, "inject", "codex-taskboard.user.js");
 const automationPoliciesPath = path.join(projectRoot, ".data", "codex-automation-policies.json");
 const taskboardOrigin = `http://127.0.0.1:${resolvePort()}`;
@@ -119,6 +121,10 @@ function startTaskboard({ detached }) {
   return spawn(process.execPath, [path.join(projectRoot, "server", "index.mjs")], {
     cwd: projectRoot,
     detached,
+    env: {
+      ...process.env,
+      CODEX_TASKBOARD_HOST: process.env.CODEX_TASKBOARD_HOST?.trim() || "127.0.0.1",
+    },
     stdio: detached ? "ignore" : "inherit",
   });
 }
@@ -184,23 +190,48 @@ function createTaskboardSupervisor({ detached }) {
   return { ensure, stop };
 }
 
-function codexIsRunning() {
-  return spawnSync("/usr/bin/pgrep", ["-x", "ChatGPT"], { stdio: "ignore" }).status === 0;
+async function launchCodex(appPath, port) {
+  await mkdir(launcherCodexUserDataPath, { recursive: true });
+  const executableName = path.basename(appPath, path.extname(appPath));
+  const executablePath = path.join(appPath, "Contents", "MacOS", executableName);
+  return spawn(executablePath, [
+    `--user-data-dir=${launcherCodexUserDataPath}`,
+    `--remote-debugging-port=${port}`,
+    `--remote-allow-origins=http://127.0.0.1:${port}`,
+  ], {
+    detached: true,
+    env: {
+      ...process.env,
+      CODEX_ELECTRON_USER_DATA_PATH: launcherCodexUserDataPath,
+    },
+    stdio: "ignore",
+  });
 }
 
-function launchCodex(appPath, port) {
-  return spawn(
-    "/usr/bin/open",
-    [
-      "-W",
-      "-a",
-      appPath,
-      "--args",
-      `--remote-debugging-port=${port}`,
-      `--remote-allow-origins=http://127.0.0.1:${port}`,
-    ],
-    { stdio: "ignore" },
-  );
+function stopLaunchedCodex(child) {
+  if (child?.exitCode === null && !child.killed) child.kill("SIGTERM");
+}
+
+async function waitForLaunchedCodex(child, url, timeoutMs) {
+  let processError = null;
+  let processExit = null;
+  child.once("error", (error) => {
+    processError = error;
+  });
+  child.once("exit", (code, signal) => {
+    processExit = { code, signal };
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (processError) throw processError;
+    if (processExit) {
+      throw new Error(`Codex exited before CDP was ready (${processExit.signal || processExit.code})`);
+    }
+    if (await isReachable(url)) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for ${url}`);
 }
 
 function processCwd(pid) {
@@ -843,6 +874,14 @@ async function publishInjectionScriptIdentifier(cdp, scriptIdentifier) {
   });
 }
 
+async function republishInjectionScriptIdentifier(cdp, scriptIdentifier) {
+  try {
+    await publishInjectionScriptIdentifier(cdp, scriptIdentifier);
+  } catch (error) {
+    if (!cdp.closed) throw error;
+  }
+}
+
 async function registerInjectionSource(cdp, source) {
   const registration = await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
     source: `${source}\n//# sourceURL=codex-taskboard.user.js`,
@@ -888,7 +927,7 @@ async function injectTarget(
         }),
       });
       cdp.on("Page.loadEventFired", () => (
-        publishInjectionScriptIdentifier(cdp, reconciled.scriptIdentifier)
+        republishInjectionScriptIdentifier(cdp, reconciled.scriptIdentifier)
       ));
       await publishHostHeartbeat(cdp, startupToken);
       const status = await waitForInjectionStatus(
@@ -908,7 +947,7 @@ async function injectTarget(
     }
     const scriptIdentifier = await registerInjectionSource(cdp, source);
     cdp.on("Page.loadEventFired", () => (
-      publishInjectionScriptIdentifier(cdp, scriptIdentifier)
+      republishInjectionScriptIdentifier(cdp, scriptIdentifier)
     ));
     const reloaded = cdp.waitFor("Page.loadEventFired", 15_000);
     await cdp.send("Page.reload");
@@ -994,6 +1033,62 @@ async function injectAll(
   return results;
 }
 
+function initialInjectionCanRetry(error) {
+  return error instanceof Error && (
+    error.message === "No Codex renderer target found"
+    || error.message === "Taskboard iframe did not finish loading in the Codex renderer"
+    || error.message.includes("Timed out waiting for CDP event Page.loadEventFired")
+    || error.message.includes("CDP WebSocket closed")
+  );
+}
+
+async function injectInitial(
+  port,
+  source,
+  sourceHash,
+  shouldOpen,
+  screenshotPath,
+  injectedTargets,
+  keepAlive,
+  supervisor,
+  attachExisting,
+  startupToken,
+  timeoutMs = 60_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    await waitForStableTargetSet({
+      discover: () => codexTargets(port),
+      timeoutMs: deadline - Date.now(),
+    });
+    try {
+      return await injectAll(
+        port,
+        source,
+        sourceHash,
+        shouldOpen,
+        screenshotPath,
+        injectedTargets,
+        keepAlive,
+        supervisor,
+        attachExisting,
+        startupToken,
+      );
+    } catch (error) {
+      lastError = error;
+      injectedTargets.forEach((connection) => connection.close());
+      injectedTargets.clear();
+      if (!initialInjectionCanRetry(error)) throw error;
+      if (Date.now() >= deadline) break;
+      console.error(`Codex renderer changed during initial injection (${error.message}); waiting for the stable renderer...`);
+    }
+  }
+  throw new Error(
+    `Codex renderer did not stabilize within ${timeoutMs} ms${lastError ? `: ${lastError.message}` : ""}`,
+  );
+}
+
 async function currentInjectionSource() {
   const userScript = await readFile(injectionPath, "utf8");
   const runtimeSource = `window.__CODEX_TASKBOARD_MANAGED_ORIGIN__ = ${JSON.stringify(taskboardOrigin)};
@@ -1061,23 +1156,18 @@ async function main() {
       if (!options.launch) {
         throw new Error(`Codex CDP is not listening on 127.0.0.1:${options.port}`);
       }
-      if (codexIsRunning()) {
-        throw new Error(
-          "Codex is already running without this CDP port. Quit Codex completely, then run this command again.",
-        );
-      }
     }
 
     await supervisor.ensure({ force: true });
 
     if (!cdpReachable) {
-      codexProcess = launchCodex(options.appPath, options.port);
-      await waitUntilReachable(cdpVersionUrl, 30_000);
+      codexProcess = await launchCodex(options.appPath, options.port);
+      await waitForLaunchedCodex(codexProcess, cdpVersionUrl, 30_000);
     }
 
     let { source, sourceHash } = await currentInjectionSource();
     const injectedTargets = new Map();
-    const firstResults = await injectAll(
+    const firstResults = await injectInitial(
       options.port,
       source,
       sourceHash,
@@ -1099,6 +1189,7 @@ async function main() {
     const stop = () => {
       injectedTargets.forEach((connection) => connection.close());
       supervisor.stop();
+      stopLaunchedCodex(codexProcess);
       process.exit(0);
     };
     process.once("SIGINT", stop);
@@ -1149,6 +1240,7 @@ async function main() {
     supervisor.stop();
   } catch (error) {
     supervisor.stop();
+    stopLaunchedCodex(codexProcess);
     throw error;
   }
 }

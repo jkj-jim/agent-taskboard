@@ -138,6 +138,47 @@ export async function maintainHostHeartbeats({
   return failures;
 }
 
+export async function waitForStableTargetSet({
+  discover,
+  timeoutMs,
+  stableMs = 2_000,
+  pollIntervalMs = 250,
+  now = Date.now,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+}) {
+  const deadline = now() + timeoutMs;
+  let stableSignature = null;
+  let stableSince = null;
+
+  while (now() < deadline) {
+    let targets = [];
+    try {
+      targets = await discover();
+    } catch {}
+    const signature = targets
+      .map((target) => target?.id)
+      .filter((id) => typeof id === "string" && id.length > 0)
+      .sort()
+      .join(",");
+    const observedAt = now();
+
+    if (!signature) {
+      stableSignature = null;
+      stableSince = null;
+    } else if (signature !== stableSignature) {
+      stableSignature = signature;
+      stableSince = observedAt;
+    } else if (stableSince !== null && observedAt - stableSince >= stableMs) {
+      return targets;
+    }
+
+    const remainingMs = deadline - now();
+    if (remainingMs > 0) await sleep(Math.min(pollIntervalMs, remainingMs));
+  }
+
+  throw new Error(`Timed out after ${timeoutMs} ms waiting for a stable Codex renderer`);
+}
+
 export function findResidentInjectorPids({
   processList,
   currentPid,

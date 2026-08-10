@@ -64,6 +64,7 @@ test("the CDP bridge exposes only the fixed Taskboard automation operations", ()
 });
 
 test("the package injection command remains resident for tab-triggered recovery", () => {
+  assert.match(packageJson.scripts.codex, /--launch --watch --open --port 9231/);
   assert.match(packageJson.scripts["codex:inject"], /--watch/);
   assert.match(packageJson.scripts["codex:daemon"], /--daemon --open/);
   assert.match(source, /function startResidentInjector/);
@@ -71,6 +72,36 @@ test("the package injection command remains resident for tab-triggered recovery"
   assert.match(source, /port: defaultCodexDebuggingPort/);
   assert.match(source, /--startup-token/);
   assert.match(source, /__codexTaskboardHostStartupTokenV1/);
+});
+
+test("the local launcher preserves a running Codex and starts a separate loopback instance", () => {
+  assert.match(source, /CODEX_TASKBOARD_HOST: process\.env\.CODEX_TASKBOARD_HOST\?\.trim\(\) \|\| "127\.0\.0\.1"/);
+  assert.match(source, /const launcherCodexUserDataPath = path\.join\(projectRoot, "\.data", "codex-user-data"\)/);
+  assert.match(source, /async function launchCodex[\s\S]*?Contents", "MacOS", executableName/);
+  assert.match(source, /`--user-data-dir=\$\{launcherCodexUserDataPath\}`/);
+  assert.match(source, /CODEX_ELECTRON_USER_DATA_PATH: launcherCodexUserDataPath/);
+  assert.match(source, /detached: true/);
+  assert.match(source, /function stopLaunchedCodex/);
+  assert.match(source, /stopLaunchedCodex\(codexProcess\)/);
+  assert.doesNotMatch(source, /Codex is already running without this CDP port/);
+  assert.doesNotMatch(source, /function codexIsRunning/);
+});
+
+test("the local launcher retries a renderer swap during the first injection", () => {
+  assert.match(source, /function initialInjectionCanRetry/);
+  assert.match(source, /Taskboard iframe did not finish loading in the Codex renderer/);
+  assert.match(runtimeSource, /export async function waitForStableTargetSet/);
+  assert.match(source, /async function injectInitial\([\s\S]*?timeoutMs = 60_000,/);
+  assert.match(source, /Codex renderer changed during initial injection/);
+  assert.doesNotMatch(source, /maximumAttempts = 3/);
+  assert.match(source, /const firstResults = await injectInitial/);
+});
+
+test("renderer replacement does not report an expected load handler failure", () => {
+  assert.match(source, /async function republishInjectionScriptIdentifier/);
+  assert.match(source, /if \(!cdp\.closed\) throw error/);
+  assert.match(source, /republishInjectionScriptIdentifier\(cdp, reconciled\.scriptIdentifier\)/);
+  assert.match(source, /republishInjectionScriptIdentifier\(cdp, scriptIdentifier\)/);
 });
 
 test("attach reconciles the renderer against a hashed current injection source", () => {

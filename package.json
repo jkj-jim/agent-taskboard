@@ -10,7 +10,7 @@
     "taskctl": "./cli/taskctl.mjs"
   },
   "scripts": {
-    "codex": "node scripts/codex-injector.mjs --launch --watch --open",
+    "codex": "node scripts/codex-injector.mjs --launch --watch --open --port 9231",
     "codex:inject": "node scripts/codex-injector.mjs --watch",
     "codex:daemon": "node scripts/codex-injector.mjs --daemon --open",
     "codex:refresh": "node scripts/codex-injector.mjs --refresh",

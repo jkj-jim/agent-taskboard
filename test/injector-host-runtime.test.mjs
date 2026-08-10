@@ -6,6 +6,7 @@ import {
   handleHostBindingPayload,
   maintainHostHeartbeats,
   reconcileInjectionRuntime,
+  waitForStableTargetSet,
 } from "../scripts/codex-injector-runtime.mjs";
 
 const currentAutomationRequest = {
@@ -144,6 +145,49 @@ test("a stalled CDP heartbeat is evicted without blocking the resident loop", as
     stalled,
     "CDP heartbeat timed out after 10 ms",
   ]]);
+});
+
+test("initial injection waits for the same renderer target set to remain stable", async () => {
+  let currentTime = 0;
+  let discoveryCount = 0;
+  const snapshots = [
+    [],
+    [{ id: "renderer-a" }],
+    [{ id: "renderer-b" }],
+    [{ id: "renderer-b" }],
+    [{ id: "renderer-b" }],
+  ];
+
+  const targets = await waitForStableTargetSet({
+    discover: async () => snapshots[Math.min(discoveryCount++, snapshots.length - 1)],
+    timeoutMs: 1_000,
+    stableMs: 200,
+    pollIntervalMs: 100,
+    now: () => currentTime,
+    sleep: async (delayMs) => {
+      currentTime += delayMs;
+    },
+  });
+
+  assert.deepEqual(targets, [{ id: "renderer-b" }]);
+  assert.equal(discoveryCount, 5);
+});
+
+test("initial injection reports a bounded timeout when no renderer stabilizes", async () => {
+  let currentTime = 0;
+  await assert.rejects(
+    waitForStableTargetSet({
+      discover: async () => [],
+      timeoutMs: 300,
+      stableMs: 200,
+      pollIntervalMs: 100,
+      now: () => currentTime,
+      sleep: async (delayMs) => {
+        currentTime += delayMs;
+      },
+    }),
+    /Timed out after 300 ms waiting for a stable Codex renderer/,
+  );
 });
 
 test("resident discovery accepts this repository's absolute and relative launch forms only", () => {
