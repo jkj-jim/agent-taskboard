@@ -71,7 +71,9 @@ async function requestWithHost(baseUrl, host) {
 
 test("health and the default local project are available", async () => {
   let skillPath;
+  let dataDirectory;
   const baseUrl = await startServer(async (directory) => {
+    dataDirectory = directory;
     skillPath = path.join(directory, "skills", "manage-taskboard", "SKILL.md");
     return { skillPath };
   });
@@ -84,6 +86,7 @@ test("health and the default local project are available", async () => {
   assert.equal(metadata.response.status, 200);
   assert.deepEqual(metadata.body, {
     manageTaskboardSkillPath: skillPath,
+    taskctlShimPath: path.join(dataDirectory, "bin", "taskctl"),
     capabilities: { localAiChat: true, nativeCodexTaskLaunch: false },
   });
 

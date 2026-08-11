@@ -381,6 +381,11 @@ function workspaceName(path?: string): string | null {
   return parts.at(-1) ?? path;
 }
 
+/** Mirrors the server's `shellQuote`: agents paste these paths into a shell. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
@@ -1112,6 +1117,7 @@ export function App() {
         && current.realtime?.transport === metadata.realtime?.transport
         && current.realtime?.intervalMs === metadata.realtime?.intervalMs
         && current.manageTaskboardSkillPath === metadata.manageTaskboardSkillPath
+        && current.taskctlShimPath === metadata.taskctlShimPath
         && current.localCapabilities?.available === metadata.localCapabilities?.available
         && current.capabilities?.localAiChat === metadata.capabilities?.localAiChat
         && current.capabilities?.nativeCodexTaskLaunch === metadata.capabilities?.nativeCodexTaskLaunch
@@ -1834,7 +1840,15 @@ export function App() {
       ?? hostContext?.workspacePath;
     // The assignee decides which client picks the work up.
     const agentKind = agentByActorId(task.assignee.id)?.kind ?? "codex";
-    const prompt = `使用 manage-taskboard skill 处理任务 ${task.identifier}。`;
+    // A deeplinked client is spawned by its own app, not by the board, so it
+    // never inherits the PATH carrying `taskctl`; hand it the shim outright.
+    const taskctlShim = taskboardMetadata?.taskctlShimPath;
+    const prompt = [
+      `使用 manage-taskboard skill 执行任务 ${task.identifier}。`,
+      ...(taskctlShim
+        ? [`本任务中的每一次 Taskboard 操作都使用 ${shellQuote(taskctlShim)}。`]
+        : []),
+    ].join("");
 
     if (agentKind !== "codex") {
       const link = agentNewSessionLink(agentKind, { prompt, workspacePath });

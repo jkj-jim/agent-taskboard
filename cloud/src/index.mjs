@@ -1946,6 +1946,7 @@ async function routeApi(request, env, actor, url) {
     return json(200, {
       mode: "cloud",
       manageTaskboardSkillPath: null,
+      taskctlShimPath: null,
       capabilities: {
         localAiChat: false,
         nativeCodexTaskLaunch: false,

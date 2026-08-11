@@ -242,7 +242,7 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
 
   await coordinator.launch(launchInput("quoted"));
 
-  assert.match(createInput.instruction, /^处理任务 TEST-quoted。/);
+  assert.match(createInput.instruction, /^执行任务 TEST-quoted。/);
   assert.match(createInput.instruction, /每一次 Taskboard 操作都使用/);
   assert.match(
     createInput.instruction,

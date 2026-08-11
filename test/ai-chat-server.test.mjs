@@ -272,7 +272,7 @@ test("a user move into in progress is launched natively exactly once without cod
     const taskctlShim = path.join(fixture.directory, "bin", "taskctl");
     assert.match(
       fixture.nativeLaunches[0].instruction,
-      new RegExp(`^处理任务 ${created.body.task.identifier}。`),
+      new RegExp(`^执行任务 ${created.body.task.identifier}。`),
     );
     assert.equal(fixture.nativeLaunches[0].instruction.includes(`'${taskctlShim}'`), true);
     assert.match(fixture.nativeLaunches[0].instruction, /每一次 Taskboard 操作都使用/);

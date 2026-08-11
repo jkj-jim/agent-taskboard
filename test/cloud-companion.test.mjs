@@ -525,6 +525,7 @@ test("configured server proxies business APIs without touching local rows and ad
       localCapabilities: { available: true },
       capabilities: { localAiChat: true, nativeCodexTaskLaunch: false },
       manageTaskboardSkillPath: app.options.skillPath,
+      taskctlShimPath: path.join(directory, "bin", "taskctl"),
     });
     const session = await fetch(`${baseUrl}/api/local/cloud-session`)
       .then((response) => response.json());

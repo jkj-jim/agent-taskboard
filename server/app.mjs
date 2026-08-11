@@ -1572,7 +1572,7 @@ export function createTaskboardServer(options = {}) {
         agentKind: agent.id,
       });
       const run = await aiChat.startTurn(thread.id, {
-        message: `处理任务 ${task.identifier}。`,
+        message: `执行任务 ${task.identifier}。`,
       });
       return {
         status: "started",
@@ -1694,6 +1694,9 @@ export function createTaskboardServer(options = {}) {
           : false;
         return sendJson(response, 200, {
           manageTaskboardSkillPath: resolved.skillPath,
+          // External clients opened by deeplink do not inherit the agent PATH
+          // that `AiChat#turnEnv` builds, so they need the shim spelled out.
+          taskctlShimPath: loopback ? await taskctlRuntime.shimPath() : null,
           capabilities: {
             localAiChat: loopback,
             nativeCodexTaskLaunch,
