@@ -34,6 +34,12 @@
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "^1.94.0",
+    "@tiptap/extension-image": "^3.29.2",
+    "@tiptap/extension-list": "^3.29.2",
+    "@tiptap/extension-table": "^3.29.2",
+    "@tiptap/markdown": "^3.29.2",
+    "@tiptap/react": "^3.29.2",
+    "@tiptap/starter-kit": "^3.29.2",
     "@xyflow/react": "^12.11.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

@@ -8,7 +8,7 @@ const detailSource = await readFile(new URL("../web/src/components/TaskDetail.ts
 test("issue title and description keep Linear-style inline editing when focused", () => {
   assert.match(
     styles,
-    /\.issue-title-input:focus:not\(:disabled\),\s*\.issue-title-input:focus-visible:not\(:disabled\),\s*\.issue-description-input:focus:not\(:disabled\),\s*\.issue-description-input:focus-visible:not\(:disabled\),\s*\.issue-description-read:focus-visible\s*\{[^}]*border-color:\s*transparent;[^}]*outline:\s*0;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s,
+    /\.issue-title-input:focus:not\(:disabled\),\s*\.issue-title-input:focus-visible:not\(:disabled\),\s*\.issue-description-tiptap-shell:focus-within,\s*\.issue-description-read:focus-visible\s*\{[^}]*border-color:\s*transparent;[^}]*outline:\s*0;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s,
   );
   assert.match(
     styles,

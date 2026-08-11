@@ -13,6 +13,10 @@ const detailSource = await readFile(
   new URL("../web/src/components/TaskDetail.tsx", import.meta.url),
   "utf8",
 );
+const editorSource = await readFile(
+  new URL("../web/src/components/MarkdownDescriptionEditor.tsx", import.meta.url),
+  "utf8",
+);
 const styles = await readFile(
   new URL("../web/src/styles.css", import.meta.url),
   "utf8",
@@ -36,6 +40,34 @@ test("issue detail renders descriptions and comments with GFM markdown", () => {
     /comment\.body && <div className="comment-body"><DescriptionDocument value=\{comment\.body\} \/><\/div>/,
   );
   assert.doesNotMatch(detailSource, /value\.split\("\\n"\)/);
+});
+
+test("editing an issue description uses one WYSIWYG Markdown surface", () => {
+  assert.equal(typeof packageJson.dependencies["@tiptap/react"], "string");
+  assert.equal(typeof packageJson.dependencies["@tiptap/markdown"], "string");
+  assert.match(detailSource, /lazy\(\(\) => import\("\.\/MarkdownDescriptionEditor"\)\)/);
+  assert.match(detailSource, /<MarkdownDescriptionEditor/);
+  assert.match(editorSource, /StarterKit\.configure/);
+  assert.match(editorSource, /trailingNode: false/);
+  assert.match(editorSource, /contentType: "markdown"/);
+  assert.match(editorSource, /onUpdate: \(\{ editor: nextEditor \}\) => onChange\(nextEditor\.getMarkdown\(\)\)/);
+  assert.match(editorSource, /aria-label": "任务描述编辑器"/);
+  assert.match(editorSource, /onBlur: \(\{ editor: nextEditor, event \}\) =>/);
+  assert.match(editorSource, /blurReadyRef\.current/);
+  assert.match(editorSource, /Promise\.resolve\(\)[\s\S]*\.finally\(\(\) => \{\s*savingRef\.current = false;/);
+  assert.match(editorSource, /const empty = !value\.trim\(\);/);
+  assert.match(editorSource, /event\.key === "Enter" && \(event\.metaKey \|\| event\.ctrlKey\)/);
+  assert.doesNotMatch(editorSource, /<button|issue-description-editor-toolbar/);
+  assert.doesNotMatch(detailSource, /Markdown 实时预览/);
+});
+
+test("the WYSIWYG editor styles rich task-list nodes inside the editing surface", () => {
+  assert.match(styles, /\.issue-description-tiptap-content ul\[data-type="taskList"\]/);
+  assert.match(styles, /\.issue-description-tiptap-content\.issue-description-document li > p\s*\{[^}]*margin-bottom:\s*0;/s);
+  assert.match(styles, /\.issue-description-tiptap-shell\.empty:not\(:focus-within\)::before/);
+  assert.doesNotMatch(styles, /ProseMirror-trailingBreak:only-child\)[^{]*\{[^}]*height:\s*0;/s);
+  assert.match(styles, /\.issue-description-tiptap-content li\[data-checked\]/);
+  assert.doesNotMatch(styles, /\.issue-description-editor-body/);
 });
 
 test("issue detail markdown styles cover rich document elements", () => {

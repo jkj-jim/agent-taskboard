@@ -65,6 +65,16 @@ test("new issues stage attachments in the composer and upload them after creatio
   assert.match(appSource, /附件上传失败，可在详情页重试/);
 });
 
+test("a new in-progress issue assigned to Codex starts a native task after creation writes finish", () => {
+  assert.match(appSource, /function shouldAutoLaunchCodex\(previous: Task \| null, task: Task\)/);
+  assert.match(appSource, /return previous === null[\s\S]*?previous\.status !== "in_progress"/);
+  assert.match(
+    appSource,
+    /if \(creating && \(attachments\.length > 0 \|\| inlineImages\.length > 0\)\)[\s\S]*?if \(creating\) \{\s*const nativeLaunch = await autoLaunchCodex\(null, saved\)/,
+  );
+  assert.match(appSource, /nativeCodexStarted \? "，Codex 已在后台开始处理"/);
+});
+
 test("the issue composer includes Linear-style labels and scheduling", () => {
   for (const label of ["缺陷", "特性", "for-claude", "hold", "改进", "phase-1", "phase-6"]) {
     assert.match(labelsSource, new RegExp(label));

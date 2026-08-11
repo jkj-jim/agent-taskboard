@@ -422,11 +422,12 @@ function taskAgentSessionId(task: Task, agentKind: AgentKind): string | null {
     ?? (agentKind === "codex" ? task.threadId : null);
 }
 
-function shouldAutoLaunchCodex(previous: Task, task: Task): boolean {
+function shouldAutoLaunchCodex(previous: Task | null, task: Task): boolean {
   if (task.status !== "in_progress" || agentByActorId(task.assignee.id)?.kind !== "codex") {
     return false;
   }
-  return previous.status !== "in_progress"
+  return previous === null
+    || previous.status !== "in_progress"
     || (previous.status === "in_progress" && previous.assignee.id !== task.assignee.id);
 }
 
@@ -1438,7 +1439,7 @@ export function App() {
   }
 
   async function autoLaunchCodex(
-    previous: Task,
+    previous: Task | null,
     task: Task,
   ): Promise<{ task: Task; started: boolean }> {
     if (!shouldAutoLaunchCodex(previous, task)) return { task, started: false };
@@ -1513,6 +1514,11 @@ export function App() {
           ({ task: saved } = await updateTaskRequest(saved, { ...draft, description }));
         }
       }
+      if (creating) {
+        const nativeLaunch = await autoLaunchCodex(null, saved);
+        saved = nativeLaunch.task;
+        nativeCodexStarted = nativeLaunch.started;
+      }
       setTasks((current) => sortTasks([
         ...current.filter((task) => task.id !== saved.id),
         saved,
@@ -1523,7 +1529,7 @@ export function App() {
       }
       if (creating) {
         const totalUploaded = uploadedAttachments + inlineImages.length;
-        const message = `${saved.identifier} 已创建${totalUploaded > 0 ? `，已上传 ${totalUploaded} 个附件` : ""}。`;
+        const message = `${saved.identifier} 已创建${totalUploaded > 0 ? `，已上传 ${totalUploaded} 个附件` : ""}${nativeCodexStarted ? "，Codex 已在后台开始处理" : ""}。`;
         pushUndo(message, async () => {
           const candidate = tasksRef.current.find((task) => task.id === saved.id);
           const current = candidate && candidate.version >= saved.version ? candidate : saved;

@@ -2532,11 +2532,9 @@ kbd {
 }
 
 .issue-title-input,
-.issue-description-input {
+.issue-description-tiptap-shell {
   display: block;
   width: 100%;
-  overflow: hidden;
-  resize: none;
   border: var(--border-hairline) solid transparent;
   border-radius: 7px;
   outline: 0;
@@ -2545,15 +2543,14 @@ kbd {
 }
 
 .issue-title-input:hover:not(:disabled),
-.issue-description-input:hover:not(:disabled),
+.issue-description-tiptap-shell:hover:not(.is-disabled),
 .issue-description-read:hover {
   background: color-mix(in srgb, var(--surface-hover) 70%, transparent);
 }
 
 .issue-title-input:focus:not(:disabled),
 .issue-title-input:focus-visible:not(:disabled),
-.issue-description-input:focus:not(:disabled),
-.issue-description-input:focus-visible:not(:disabled),
+.issue-description-tiptap-shell:focus-within,
 .issue-description-read:focus-visible {
   border-color: transparent;
   outline: 0;
@@ -2571,7 +2568,7 @@ kbd {
   line-height: 38px;
 }
 
-.issue-description-input,
+.issue-description-tiptap-shell,
 .issue-description-read {
   width: calc(100% + 28px);
   min-height: 68px;
@@ -2581,6 +2578,75 @@ kbd {
   font-size: 15px;
   font-weight: 430;
   line-height: 24px;
+}
+
+.issue-description-tiptap-shell {
+  position: relative;
+  cursor: text;
+}
+
+.issue-description-tiptap-shell.empty:not(:focus-within)::before {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  color: var(--text-tertiary);
+  content: "添加描述…";
+  pointer-events: none;
+}
+
+.issue-description-tiptap-content {
+  width: 100%;
+  min-height: 42px;
+  padding: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 430;
+  line-height: 24px;
+  cursor: text;
+}
+
+.issue-description-tiptap-content.ProseMirror-focused {
+  outline: 0;
+}
+
+.issue-description-tiptap-content ul[data-type="taskList"] {
+  padding-left: 2px;
+  list-style: none;
+}
+
+.issue-description-tiptap-content.issue-description-document li > p {
+  margin-bottom: 0;
+}
+
+.issue-description-tiptap-content > :nth-last-child(2):has(+ p:last-child > br.ProseMirror-trailingBreak:only-child) {
+  margin-bottom: 0;
+}
+
+.issue-description-tiptap-content li[data-checked] {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.issue-description-tiptap-content li[data-checked] > label {
+  flex: 0 0 auto;
+  padding-top: 1px;
+}
+
+.issue-description-tiptap-content li[data-checked] > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.issue-description-tiptap-content input[type="checkbox"] {
+  pointer-events: auto;
+}
+
+.issue-description-tiptap-content .ProseMirror-selectednode {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
 }
 
 .issue-description-read {
@@ -2836,10 +2902,6 @@ kbd {
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.issue-description-input::placeholder {
-  color: var(--text-tertiary);
 }
 
 .issue-attachments {

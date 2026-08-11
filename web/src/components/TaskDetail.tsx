@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { lazy, memo, Suspense, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -70,6 +70,8 @@ const PRIORITY_DETAILS: Record<TaskPriority, { label: string; bars: number }> = 
   medium: { label: "中", bars: 2 },
   low: { label: "低", bars: 1 },
 };
+
+const MarkdownDescriptionEditor = lazy(() => import("./MarkdownDescriptionEditor"));
 
 interface TaskDetailProps {
   task: Task;
@@ -149,7 +151,7 @@ function contextLabel(context: DevelopmentContext): string {
   return `${context.branch ?? "detached"} · ${folder}`;
 }
 
-function DescriptionDocument({ value }: { value: string }) {
+const DescriptionDocument = memo(function DescriptionDocument({ value }: { value: string }) {
   return (
     <div className="issue-description-document">
       <ReactMarkdown
@@ -162,7 +164,7 @@ function DescriptionDocument({ value }: { value: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function ConversationLink({
   agentKind,
@@ -241,7 +243,6 @@ export function TaskDetail({
   const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
-  const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<InlineMediaComposerHandle>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const commentAttachmentInputRef = useRef<HTMLInputElement>(null);
@@ -253,21 +254,12 @@ export function TaskDetail({
   useEffect(() => {
     setCurrentTask(task);
     if (document.activeElement !== titleRef.current) setTitle(task.title);
-    if (document.activeElement !== descriptionRef.current) setDescription(task.description);
-  }, [task]);
+    if (!editingDescription) setDescription(task.description);
+  }, [editingDescription, task]);
 
   useEffect(() => {
     resizeTextarea(titleRef.current);
-    resizeTextarea(descriptionRef.current);
-  }, [title, description, editingDescription]);
-
-  useEffect(() => {
-    if (!editingDescription) return;
-    requestAnimationFrame(() => {
-      descriptionRef.current?.focus();
-      resizeTextarea(descriptionRef.current);
-    });
-  }, [editingDescription]);
+  }, [title]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -404,10 +396,23 @@ export function TaskDetail({
     await saveTask({ title: normalized }, "title");
   }
 
-  async function saveDescription() {
-    const normalized = description.trim();
-    if (normalized === currentTask.description) return;
-    await saveTask({ description: normalized }, "description");
+  async function saveDescription(value = description): Promise<boolean> {
+    const normalized = value.trim();
+    if (normalized === currentTask.description) {
+      setDescription(normalized);
+      return true;
+    }
+    return Boolean(await saveTask({ description: normalized }, "description"));
+  }
+
+  function cancelDescriptionEditing() {
+    setDescription(currentTask.description);
+    setEditingDescription(false);
+  }
+
+  async function commitDescription(value = description) {
+    if (savingProperty === "description") return;
+    if (await saveDescription(value)) setEditingDescription(false);
   }
 
   async function submitComment() {
@@ -627,29 +632,19 @@ export function TaskDetail({
                   )}
                 />
                 {editingDescription ? (
-                  <textarea
-                    ref={descriptionRef}
-                    className="issue-description-input"
-                    rows={1}
-                    value={description}
-                    aria-label="任务描述"
-                    placeholder="添加描述…"
-                    disabled={savingProperty === "description"}
-                    onChange={(event) => {
-                      setDescription(event.target.value);
-                      resizeTextarea(event.currentTarget);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        setDescription(currentTask.description);
-                        setEditingDescription(false);
-                      }
-                    }}
-                    onBlur={() => {
-                      setEditingDescription(false);
-                      void saveDescription();
-                    }}
-                  />
+                  <Suspense fallback={(
+                    <div className={`issue-description-read${description ? "" : " empty"}`} aria-hidden="true">
+                      {description ? <DescriptionDocument value={description} /> : "添加描述…"}
+                    </div>
+                  )}>
+                    <MarkdownDescriptionEditor
+                      value={description}
+                      disabled={savingProperty === "description"}
+                      onChange={setDescription}
+                      onCancel={cancelDescriptionEditing}
+                      onSave={commitDescription}
+                    />
+                  </Suspense>
                 ) : (
                   <div
                     className={`issue-description-read${description ? "" : " empty"}`}
