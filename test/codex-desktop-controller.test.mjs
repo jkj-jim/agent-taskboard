@@ -252,6 +252,34 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
   assert.ok(createInput.instruction.length <= 1_024);
 });
 
+test("native task launch names the project so the thread is not filed projectless", async () => {
+  const current = task("filed");
+  let createInput;
+  const coordinator = createCodexTaskLaunchCoordinator({
+    desktopController: {
+      async createTask(input) {
+        createInput = input;
+        return {
+          status: "started",
+          sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        };
+      },
+    },
+    loadTask: async () => current,
+    resolveWorkspace: async () => "/tmp/project",
+    resolveTaskctlShim: async () => "/tmp/taskctl",
+    bindSession: async () => ({ ...current, version: 2 }),
+    skillPath: "/tmp/manage-taskboard/SKILL.md",
+    codexActorId: CODEX_ACTOR_ID,
+  });
+
+  await coordinator.launch(launchInput("filed"));
+
+  // The workspace root alone leaves the sidebar project on its last choice.
+  assert.equal(createInput.workspacePath, "/tmp/project");
+  assert.equal(createInput.projectId, current.projectId);
+});
+
 test("native task launch rejects instructions over the injector limit", async () => {
   const current = task("long");
   let createCount = 0;

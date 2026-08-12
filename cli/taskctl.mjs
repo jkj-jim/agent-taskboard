@@ -10,6 +10,7 @@ import {
   AGENTS,
   AGENT_KINDS,
   DEFAULT_AGENT_KIND,
+  SESSION_ENV_VARS,
   agentByKind,
   isAgentKind,
 } from "../shared/agents.mjs";
@@ -831,6 +832,7 @@ export function resolveAgentKind(overrides = {}, requested) {
     return requested;
   }
   const detected = AGENTS.find((agent) => {
+    if (!agent.sessionEnvVar) return false;
     const value = env[agent.sessionEnvVar];
     return typeof value === "string" && value.trim().length > 0;
   });
@@ -839,7 +841,7 @@ export function resolveAgentKind(overrides = {}, requested) {
 
 function resolveThreadId(options, overrides) {
   const env = overrides.env ?? process.env;
-  const variables = AGENTS.map((agent) => agent.sessionEnvVar);
+  const variables = SESSION_ENV_VARS;
   const value = options["thread-id"]
     ?? variables.map((variable) => env[variable]).find((candidate) => (
       typeof candidate === "string" && candidate.trim().length > 0

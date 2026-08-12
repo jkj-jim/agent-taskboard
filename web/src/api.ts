@@ -344,6 +344,33 @@ export async function launchNativeCodexTask(
   );
 }
 
+/**
+ * WorkBuddy has no URL scheme, so bringing one of its sessions back to the
+ * front means asking the board to drive its client.
+ */
+export async function openHostAgentSession(endpoint: string): Promise<void> {
+  await request<{ status: string }>(endpoint, { method: "POST" });
+}
+
+/** Starts a task in an agent's own client, for agents without a deep link. */
+export async function launchHostAgentTask(
+  endpoint: string,
+  task: Task,
+  trigger: "status-transition" | "manual",
+  presentation: "background" | "foreground",
+  previousSessionId: string | null,
+): Promise<NativeCodexTaskLaunchResult> {
+  return request<NativeCodexTaskLaunchResult>(endpoint, {
+    method: "POST",
+    body: JSON.stringify({
+      expectedVersion: task.version,
+      trigger,
+      presentation,
+      previousSessionId,
+    }),
+  });
+}
+
 export async function archiveTask(task: Task, threadId?: string): Promise<Task> {
   const data = await request<{ task: Task }>(
     `/api/tasks/${encodeURIComponent(task.id)}/archive`,

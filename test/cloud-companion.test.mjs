@@ -509,6 +509,11 @@ test("configured server proxies business APIs without touching local rows and ad
       async inspect() { return { available: false }; },
       async createTask() { throw new Error("Codex desktop unavailable in fixture"); },
     },
+    workbuddyDesktopController: {
+      async inspect() { return { available: false, port: null, detail: "" }; },
+      async createTask() { throw new Error("WorkBuddy unavailable in fixture"); },
+      async openSession() { throw new Error("WorkBuddy unavailable in fixture"); },
+    },
     remoteFetch: async (url, init) => {
       upstreamCalls.push({ url: url.toString(), init });
       return jsonResponse({ tasks: [{ id: "REMOTE-1", projectId: "portfolio" }] });
@@ -523,7 +528,11 @@ test("configured server proxies business APIs without touching local rows and ad
       mode: "cloud",
       realtime: { transport: "poll", intervalMs: 2000 },
       localCapabilities: { available: true },
-      capabilities: { localAiChat: true, nativeCodexTaskLaunch: false },
+      capabilities: {
+        localAiChat: true,
+        nativeCodexTaskLaunch: false,
+        workbuddyTaskLaunch: false,
+      },
       manageTaskboardSkillPath: app.options.skillPath,
       taskctlShimPath: path.join(directory, "bin", "taskctl"),
     });
@@ -576,6 +585,11 @@ test("the local companion launches a native Codex task and binds it back to the 
         nativeLaunches.push(input);
         return { status: "started", sessionId };
       },
+    },
+    workbuddyDesktopController: {
+      async inspect() { return { available: false, port: null, detail: "" }; },
+      async createTask() { throw new Error("WorkBuddy unavailable in fixture"); },
+      async openSession() { throw new Error("WorkBuddy unavailable in fixture"); },
     },
     remoteFetch: async (url, init) => {
       upstreamCalls.push({ url: url.toString(), init });
@@ -644,6 +658,11 @@ test("cloud mode exposes machine capabilities only to loopback while local mode 
     codexDesktopController: {
       async inspect() { return { available: false }; },
       async createTask() { throw new Error("Codex desktop unavailable in fixture"); },
+    },
+    workbuddyDesktopController: {
+      async inspect() { return { available: false, port: null, detail: "" }; },
+      async createTask() { throw new Error("WorkBuddy unavailable in fixture"); },
+      async openSession() { throw new Error("WorkBuddy unavailable in fixture"); },
     },
     remoteFetch: async () => {
       upstreamCalls += 1;

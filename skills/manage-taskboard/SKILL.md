@@ -1,11 +1,14 @@
 ---
 name: manage-taskboard
-description: 通过 taskctl CLI 管理 Taskboard 的项目、任务、任务关系和评论。需要开始执行某个任务、读取任务详情和评论、更新任务状态、记录交付结果、跟踪新需求、创建或更新任务、关联依赖工作或协调并发更新时使用。
+description: 管理 Taskboard 的项目、任务、任务关系和评论，操作层用当前可用的 taskboard MCP 工具或 taskctl CLI。需要开始执行某个任务、读取任务详情和评论、更新任务状态、记录交付结果、跟踪新需求、创建或更新任务、关联依赖工作或协调并发更新时使用。
 ---
 
 # 管理 Taskboard
 
-所有项目、任务和评论操作都使用 `taskctl`。常用命令如下：
+本文件规定流程规则。**操作层用哪一种，取决于当前可用的能力**：
+
+- 如果可以调用 `taskboard` 的 MCP 工具（工具名形如 `taskboard_get_task`、`taskboard_list_tasks`、`taskboard_add_comment`、`taskboard_move_task`），**全程只用这些工具**：不要查找、安装或运行任何命令行工具，也不要读取 [references/cli.md](references/cli.md)（它只描述命令行）。改状态的 `move_task` 必须带 `expectedVersion`，值取自最近一次 `get_task`。
+- 否则使用 `taskctl` 命令行。常用命令如下：
 
 ```bash
 taskctl issue list --project PROJECT_ID [--status STATUS | --all-statuses] [--full] --json
@@ -15,6 +18,8 @@ taskctl comment add ISSUE_ID --body TEXT --json
 ```
 
 只有需要此处未列出的命令或选项时，才读取 [references/cli.md](references/cli.md)。如果启动指令给出了绝对路径形式的 `taskctl` shim，本轮每一次 Taskboard 操作都必须使用该路径，不只是首次读取。
+
+下文提到 `issue brief` 时，MCP 侧的等价操作是 `get_task`；提到 `issue move` 时等价于 `move_task`；提到 `comment add` 时等价于 `add_comment`。
 
 下面各节按场景组织，按当前场景取用对应的一节，不必从头依次执行。已经拿到任务标识时，直接看「执行一个已有任务」，不要先查重或创建任务。
 

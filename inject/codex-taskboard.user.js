@@ -689,24 +689,28 @@
           type: "electron-set-active-workspace-root",
           root: workspacePath,
         });
-      } else {
-        await ensureProjectRows();
-        const snapshotProjectId = hostContextSnapshot?.projectId || "";
-        const requestedProjectId = typeof payload.codexProjectId === "string"
-          ? payload.codexProjectId.trim()
-          : "";
-        const row = projectRowByLabel(payload.workspaceLabel)
-          || projectRowById(requestedProjectId)
-          || projectRowById(snapshotProjectId)
-          || projectRowByLabel(payload.projectName);
-        if (row?.getAttribute("data-app-action-sidebar-project-collapsed") === "true") {
-          row.click?.();
-          await new Promise((resolve) => window.setTimeout(resolve, 120));
-        }
-        const selectProject = row?.querySelector("[data-app-action-sidebar-select-project]");
-        selectProject?.click?.();
-        if (selectProject) await new Promise((resolve) => window.setTimeout(resolve, 120));
       }
+
+      // The workspace root only decides which folder the session may touch. Which
+      // project the thread is filed under is separate, sticky state, so it has to
+      // be picked whether or not a root was set — otherwise the thread inherits
+      // the last choice, or stays projectless when there was none.
+      await ensureProjectRows();
+      const snapshotProjectId = hostContextSnapshot?.projectId || "";
+      const requestedProjectId = typeof payload.codexProjectId === "string"
+        ? payload.codexProjectId.trim()
+        : "";
+      const row = projectRowByLabel(payload.workspaceLabel)
+        || projectRowById(requestedProjectId)
+        || projectRowById(snapshotProjectId)
+        || projectRowByLabel(payload.projectName);
+      if (row?.getAttribute("data-app-action-sidebar-project-collapsed") === "true") {
+        row.click?.();
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+      }
+      const selectProject = row?.querySelector("[data-app-action-sidebar-select-project]");
+      selectProject?.click?.();
+      if (selectProject) await new Promise((resolve) => window.setTimeout(resolve, 120));
 
       closeTaskboard(false);
       await dispatchHostMessage({

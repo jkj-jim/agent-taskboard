@@ -253,7 +253,13 @@ test("native Codex launches leave manual prompts editable and only auto-submit b
   );
   assert.match(desktopController, /submit\.click\(\)/);
   assert.match(desktopController, /CODEX_THREAD_ID\.test\(value\)/);
-  assert.match(desktopController, /await restoreRoute\(cdp, snapshot\.activeThreadId\)/);
+  assert.match(desktopController, /await restoreView\(cdp, previousProjectId, snapshot\.activeThreadId\)/);
+  // Restoring the view is cleanup: a launch that already produced a session must
+  // survive a client that will not navigate back, or the board binds nothing.
+  assert.match(
+    desktopController,
+    /success = true;\s*try \{\s*await restoreView\(cdp, previousProjectId, snapshot\.activeThreadId\);\s*\} catch \{\}/,
+  );
   assert.match(webApp, /launchNativeCodexTask\([\s\S]*?"status-transition"[\s\S]*?"background"/);
   assert.match(webApp, /launchNativeCodexTask\([\s\S]*?"manual"[\s\S]*?"foreground"/);
   assert.doesNotMatch(webApp, /type: "taskboard:create-thread"/);

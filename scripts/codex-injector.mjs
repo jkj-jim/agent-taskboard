@@ -723,6 +723,7 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
         return {
           ready: Boolean(selected),
           pathMatches: selected?.getAttribute("skill-mention-path") === skillPath,
+          selectedPath: selected?.getAttribute("skill-mention-path") ?? null,
         };
       })()`,
       contextId: executionContextId,
@@ -730,7 +731,14 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
     });
     if (mention.result.value?.ready) {
       if (!mention.result.value.pathMatches) {
-        throw new Error(`Codex selected a different ${skillName} Skill`);
+        // Another copy of the same skill shadows this checkout — usually a
+        // global one synced by an installed Taskboard app. Name both paths,
+        // because the fix is to remove or update the copy Codex picked.
+        throw new Error(
+          `Codex selected a different ${skillName} Skill: `
+          + `${mention.result.value.selectedPath ?? "未知路径"}（本看板使用 ${skillPath}）。`
+          + "请删除或更新那份重复的 Skill，或退出正在运行的 Taskboard 应用。",
+        );
       }
       mentionReady = true;
       break;

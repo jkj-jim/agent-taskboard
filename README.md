@@ -110,6 +110,37 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 - **定时自动任务和配额感知只有 Codex 有。** 这两项依赖 Codex 的原生接口，Claude 侧没有等价能力。
 - **不要在 Claude Code 会话内启动看板服务。** 子进程会继承宿主的 `CLAUDE_CODE_*` 环境变量，容易出现认证异常；请在普通终端里 `npm start`。
 
+## 配合 WorkBuddy 使用
+
+WorkBuddy 没有命令行，看板只能在它自己的客户端里唤起会话，任务读写走 MCP。
+
+### 一次性准备
+
+```bash
+npm run workbuddy
+```
+
+它会退出正在运行的 WorkBuddy，再带调试端口重新启动（默认 `9240`，可用 `--port` 改）。看板需要这个端口才能驱动它新建会话、预填任务指令并提交。**每次要用 WorkBuddy 跑任务前都用这条命令启动它**，从「应用程序」直接打开的实例没有该端口。
+
+首次派发任务时，看板会自动把自己的 MCP 地址写进 `~/.workbuddy/mcp.json`，并把 `manage-taskboard` 技能同步到 `~/.workbuddy/skills/`。然后需要你在 WorkBuddy 里做一次授权：**专家·技能·连接器 → 连接器 → MCP 服务管理 → 启用 `taskboard` → 重启 WorkBuddy**。之后不再需要重复。
+
+已经存在且仍能响应的 `taskboard` 注册条目不会被覆盖，所以你自己配好的地址不会被改掉。
+
+### 派发任务
+
+- **自动**：把负责人设为 WorkBuddy Agent，再把任务拖到「进行中」。看板会新建会话、填入指令并直接提交，然后把会话 id 绑定到任务。
+- **手动**：在任务详情里点「在对话中打开」。看板同样新建会话并预填指令，但不提交，由你确认后回车。
+- **回到已有会话**：任务上的会话入口会让看板把对应会话重新置前（WorkBuddy 没有 URL scheme，只能这样打开）。
+
+Agent 通过 `taskboard_get_task` / `taskboard_add_comment` / `taskboard_move_task` 读写看板，写入记在 WorkBuddy Agent 名下。
+
+### 注意事项
+
+- **WorkBuddy 不能在看板的 AI 对话里使用。** 它没有无头模式，看板无法自己跑一轮；在对话里选中它会得到明确提示。
+- **任务描述里不要写看板地址。** WorkBuddy 的网关会拒绝内容中含 `http://127.0.0.1:<端口>` 的请求（错误码 11133）。地址只存在于 MCP 配置里，指令里不出现。
+- **工作目录是它自己的沙箱。** 每个会话跑在 `~/WorkBuddy/<时间戳>` 下，看板无法指定项目 checkout。需要它在仓库里干活时，要在 WorkBuddy 侧用「选择工作空间」指定。
+- **停止 WorkBuddy 要走它自己的退出流程。** 直接发信号会让它卡在退出确认里，界面停在启动画面且无法关闭。
+
 ## 嵌入 Codex
 
 ### 推荐方式：一条命令打开独立的 Taskboard 窗口

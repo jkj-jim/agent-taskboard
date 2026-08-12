@@ -99,7 +99,7 @@ export class AiChatService {
   }
 
   async getCatalog(projectId, agentKind = DEFAULT_AGENT_KIND) {
-    return this.agents.get(agentKind).catalog(projectId);
+    return this.agents.getHeadless(agentKind).catalog(projectId);
   }
 
   /** The environment an agent turn runs in, with `taskctl` on its PATH. */
@@ -111,7 +111,7 @@ export class AiChatService {
 
   async createThread(input) {
     const agentKind = input.agentKind ?? DEFAULT_AGENT_KIND;
-    const agent = this.agents.get(agentKind);
+    const agent = this.agents.getHeadless(agentKind);
     const [catalog, resolved] = await Promise.all([
       this.getCatalog(input.projectId, agent.id),
       agent.resolveWorkspace(input.projectId),

@@ -160,6 +160,7 @@ export function createClaudeAgent(config) {
     label: definition.label,
     actor: definition.actor,
     assigneeTarget: definition.assigneeTarget,
+    capabilities: definition.capabilities,
     executable,
     /** `--session-id` lets the board own the id before the first turn runs. */
     preassignsSessionId: true,

@@ -34,6 +34,9 @@ import {
   createCodexDesktopController,
   createCodexTaskLaunchCoordinator,
 } from "./codex-desktop-controller.mjs";
+import { createWorkbuddyDesktopController } from "./workbuddy-desktop-controller.mjs";
+import { createWorkbuddyTaskLaunchCoordinator } from "./workbuddy-task-launch.mjs";
+import { createMcpService } from "./mcp.mjs";
 import {
   CloudProxyError,
   createCloudProxy,
@@ -1452,6 +1455,10 @@ export function createTaskboardServer(options = {}) {
       database,
       deviceWorkspaces,
     },
+    workbuddy: {
+      debuggingPort: options.workbuddyDebuggingPort,
+      desktopController: options.workbuddyDesktopController,
+    },
   });
   const taskctlRuntime = createTaskctlRuntime({
     binDirectory: path.join(resolved.dataDirectory, "bin"),
@@ -1503,51 +1510,90 @@ export function createTaskboardServer(options = {}) {
     return payload;
   }
 
+  /** Shared by every launcher: cloud tasks come from the proxy, local from SQLite. */
+  const loadTaskForLaunch = async (taskId, input) => {
+    if (input.cloud) {
+      return (await cloudJson(
+        input.sourceRequest,
+        `/api/tasks/${encodeURIComponent(taskId)}`,
+      )).task;
+    }
+    return withAgentSessions(database, database.getTask(taskId));
+  };
+
+  const bindSessionForLaunch = async (binding, input) => {
+    if (input.cloud) {
+      const { taskId, ...payload } = binding;
+      return (await cloudJson(
+        input.sourceRequest,
+        `/api/tasks/${encodeURIComponent(taskId)}/agent-sessions`,
+        "POST",
+        payload,
+      )).task;
+    }
+    const task = database.bindAgentSession(
+      binding.taskId,
+      binding.agentKind,
+      binding.sessionId,
+      binding.previousSessionId,
+    );
+    const decorated = withAgentSessions(database, task);
+    events.emit("task.updated", { task: decorated });
+    return decorated;
+  };
+
+  /**
+   * Where a task's work happens on this device. Every client that can be told
+   * to open a folder gets the same answer, whether it calls it a project, a
+   * workspace root or a 工作空间.
+   */
+  const resolveTaskWorkspace = async (task) => {
+    if (task.developmentContext?.type === "worktree" && task.developmentContext.path) {
+      try {
+        if ((await stat(task.developmentContext.path)).isDirectory()) {
+          return path.resolve(task.developmentContext.path);
+        }
+      } catch {}
+    }
+    return (await deviceWorkspaces()).get(task.projectId) ?? null;
+  };
+
   const codexTaskLauncher = createCodexTaskLaunchCoordinator({
     desktopController: codexDesktopController,
     skillPath: resolved.skillPath,
     codexActorId: codexDefinition.actor.id,
     resolveTaskctlShim: () => taskctlRuntime.shimPath(),
-    loadTask: async (taskId, input) => {
-      if (input.cloud) {
-        return (await cloudJson(
-          input.sourceRequest,
-          `/api/tasks/${encodeURIComponent(taskId)}`,
-        )).task;
-      }
-      return withAgentSessions(database, database.getTask(taskId));
-    },
-    resolveWorkspace: async (task) => {
-      if (task.developmentContext?.type === "worktree" && task.developmentContext.path) {
-        try {
-          if ((await stat(task.developmentContext.path)).isDirectory()) {
-            return path.resolve(task.developmentContext.path);
-          }
-        } catch {}
-      }
-      return (await deviceWorkspaces()).get(task.projectId) ?? null;
-    },
-    bindSession: async (binding, input) => {
-      if (input.cloud) {
-        const { taskId, ...payload } = binding;
-        return (await cloudJson(
-          input.sourceRequest,
-          `/api/tasks/${encodeURIComponent(taskId)}/agent-sessions`,
-          "POST",
-          payload,
-        )).task;
-      }
-      const task = database.bindAgentSession(
-        binding.taskId,
-        binding.agentKind,
-        binding.sessionId,
-        binding.previousSessionId,
-      );
-      const decorated = withAgentSessions(database, task);
-      events.emit("task.updated", { task: decorated });
-      return decorated;
-    },
+    loadTask: loadTaskForLaunch,
+    resolveWorkspace: resolveTaskWorkspace,
+    bindSession: bindSessionForLaunch,
   });
+
+  const workbuddyAgent = agents.get("workbuddy");
+  const workbuddyTaskLauncher = createWorkbuddyTaskLaunchCoordinator({
+    desktopController: workbuddyAgent.desktopController,
+    // `skillPath` names SKILL.md; WorkBuddy installs the whole skill directory.
+    skillPath: path.dirname(resolved.skillPath),
+    // The board's own address, which WorkBuddy keeps in its MCP config and
+    // never sees inside a conversation. Read at launch time so it matches the
+    // port the server actually bound to.
+    boardOrigin: () => boardOrigin(),
+    loadTask: loadTaskForLaunch,
+    resolveWorkspace: resolveTaskWorkspace,
+    bindSession: bindSessionForLaunch,
+  });
+
+  /** One service per author identity; writes are attributed to the agent. */
+  const mcpService = createMcpService({
+    database,
+    actor: workbuddyAgent.actor,
+  });
+
+
+  /**
+   * Launchers for agents the board cannot run itself. Codex is absent on
+   * purpose: its native launch is triggered by its own injected client.
+   */
+  const hostTaskLaunchers = new Map([["workbuddy", workbuddyTaskLauncher]]);
 
   async function startAssignedAgentOnTransition(request, previous, task) {
     const enteredInProgress = previous.status !== "in_progress" && task.status === "in_progress";
@@ -1563,7 +1609,35 @@ export function createTaskboardServer(options = {}) {
     }
     const agent = agents.list().find((candidate) => candidate.actor.id === task.assignee.id);
     if (!agent) return null;
+    // Codex's native launch is started by its own client, not from here.
     if (agent.id === codexDefinition.kind) return null;
+
+    // Agents the board cannot run itself get a session woken in their client.
+    if (agent.capabilities?.headless === false) {
+      const launcher = hostTaskLaunchers.get(agent.id);
+      if (!launcher) return null;
+      try {
+        const launched = await launcher.launch({
+          taskId: task.id,
+          expectedVersion: task.version,
+          trigger: "status-transition",
+          presentation: "background",
+          previousSessionId: null,
+          // Cloud mode proxies `/api/tasks/*` upstream, so this only ever runs
+          // for a local task.
+          cloud: false,
+          sourceRequest: request,
+        });
+        return {
+          status: launched.status,
+          agentKind: agent.id,
+          sessionId: launched.sessionId ?? null,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+        return { status: "failed", agentKind: agent.id, error: message.slice(0, 2_000) };
+      }
+    }
 
     try {
       const thread = await aiChat.createThread({
@@ -1590,6 +1664,15 @@ export function createTaskboardServer(options = {}) {
     }
   }
 
+  /** Where an agent client should reach this board, once it is listening. */
+  function boardOrigin() {
+    const address = server.address();
+    const port = address && typeof address === "object" && address.port
+      ? address.port
+      : Number(process.env.CODEX_TASKBOARD_PORT ?? 47823);
+    return `http://127.0.0.1:${port}`;
+  }
+
   const server = createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("referrer-policy", "no-referrer");
@@ -1597,6 +1680,26 @@ export function createTaskboardServer(options = {}) {
       assertTrustedNetworkRequest(request);
       const url = new URL(request.url, "http://127.0.0.1");
       const pathname = url.pathname;
+      // The MCP endpoint is how host-launch agents read and write the board.
+      // It stays outside `/api` because clients are configured with a bare
+      // `<origin>/mcp` URL, and it is loopback-only: any local process posting
+      // here writes as the agent identity.
+      if (pathname === "/mcp") {
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "MCP endpoint");
+        const bodyText = request.method === "POST"
+          ? (await readBody(request, JSON_BODY_LIMIT, "MCP request body cannot exceed 1 MiB"))
+            .toString("utf8")
+          : "";
+        const reply = await mcpService.handleHttp({
+          method: request.method,
+          accept: requestHeader(request, "accept") ?? "",
+          bodyText,
+        });
+        response.writeHead(reply.status, reply.headers);
+        return response.end(reply.body);
+      }
+
       const isLocalAiRoute = pathname === "/api/local/ai" || pathname.startsWith("/api/local/ai/");
       if (isLocalAiRoute) {
         assertAiLoopbackRequest(request);
@@ -1689,9 +1792,12 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/meta does not accept query parameters");
         }
         const loopback = isLoopbackAddress(request.socket.remoteAddress);
-        const nativeCodexTaskLaunch = loopback
-          ? (await codexDesktopController.inspect()).available
-          : false;
+        const [nativeCodexTaskLaunch, workbuddyTaskLaunch] = loopback
+          ? await Promise.all([
+            codexDesktopController.inspect().then((state) => state.available, () => false),
+            workbuddyAgent.desktopController.inspect().then((state) => state.available, () => false),
+          ])
+          : [false, false];
         return sendJson(response, 200, {
           manageTaskboardSkillPath: resolved.skillPath,
           // External clients opened by deeplink do not inherit the agent PATH
@@ -1700,6 +1806,7 @@ export function createTaskboardServer(options = {}) {
           capabilities: {
             localAiChat: loopback,
             nativeCodexTaskLaunch,
+            workbuddyTaskLaunch,
           },
           ...(capabilityCloudConfig?.remoteUrl
             ? {
@@ -1895,6 +2002,47 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(502, "CODEX_NATIVE_TASK_LAUNCH_FAILED", detail);
         }
         return sendJson(response, 200, result);
+      }
+
+      const workbuddyLaunchRoute = pathname.match(
+        /^\/api\/local\/workbuddy\/tasks\/([^/]+)\/launch$/,
+      );
+      if (workbuddyLaunchRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "WorkBuddy task launch");
+        const taskId = decodeRouteSegment(workbuddyLaunchRoute[1], "Task id");
+        // WorkBuddy always brings its own window forward, so `presentation` is
+        // accepted for a uniform client contract but has no effect here.
+        const launch = parseNativeCodexLaunch(await readJson(request));
+        let result;
+        try {
+          result = await workbuddyTaskLauncher.launch({
+            ...launch,
+            taskId,
+            cloud: Boolean(currentCloudConfig?.remoteUrl),
+            sourceRequest: request,
+          });
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          const detail = error instanceof Error && error.message.trim()
+            ? error.message.trim().slice(0, 1_000)
+            : "WorkBuddy 任务启动失败";
+          throw new ApiError(502, "WORKBUDDY_TASK_LAUNCH_FAILED", detail);
+        }
+        return sendJson(response, 200, result);
+      }
+
+      const workbuddyOpenRoute = pathname.match(
+        /^\/api\/local\/workbuddy\/sessions\/([^/]+)\/open$/,
+      );
+      if (workbuddyOpenRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "WorkBuddy session open");
+        await assertEmptyRequestBody(request, "POST /api/local/workbuddy/sessions/:id/open");
+        const sessionId = decodeRouteSegment(workbuddyOpenRoute[1], "Session id");
+        return sendJson(response, 200, await workbuddyTaskLauncher.openSession(sessionId));
       }
 
       if (pathname === "/api/projects") {

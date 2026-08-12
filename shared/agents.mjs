@@ -5,6 +5,13 @@
  * table, so adding an agent means adding one entry here plus one adapter under
  * `server/agents/`. Nothing else may branch on an agent name.
  */
+/**
+ * `capabilities` is how call sites ask what an agent can do instead of testing
+ * its name:
+ *   headless   the board can spawn a turn itself and stream the events
+ *   hostLaunch the board can only wake a session inside the agent's own client
+ *   boardAccess how the agent reads and writes the board from its side
+ */
 export const AGENTS = [
   {
     kind: "codex",
@@ -12,6 +19,7 @@ export const AGENTS = [
     actor: { type: "agent", id: "codex-agent", name: "Codex Agent", avatarUrl: null },
     assigneeTarget: "codex-agent",
     sessionEnvVar: "CODEX_THREAD_ID",
+    capabilities: { headless: true, hostLaunch: true, boardAccess: "taskctl" },
   },
   {
     kind: "claude",
@@ -19,6 +27,16 @@ export const AGENTS = [
     actor: { type: "agent", id: "claude-agent", name: "Claude Agent", avatarUrl: null },
     assigneeTarget: "claude-agent",
     sessionEnvVar: "CLAUDE_CODE_SESSION_ID",
+    capabilities: { headless: true, hostLaunch: false, boardAccess: "taskctl" },
+  },
+  {
+    kind: "workbuddy",
+    label: "WorkBuddy",
+    actor: { type: "agent", id: "workbuddy-agent", name: "WorkBuddy Agent", avatarUrl: null },
+    assigneeTarget: "workbuddy-agent",
+    /** WorkBuddy has no CLI, so no session ever announces itself through env. */
+    sessionEnvVar: null,
+    capabilities: { headless: false, hostLaunch: true, boardAccess: "mcp" },
   },
 ];
 
@@ -51,3 +69,13 @@ export function isAgentKind(value) {
 export function isAssigneeTarget(value) {
   return ASSIGNEE_TARGETS.includes(value);
 }
+
+/** Agents whose turns the board can run itself, i.e. those with an AI chat. */
+export const HEADLESS_AGENT_KINDS = AGENTS
+  .filter((agent) => agent.capabilities.headless)
+  .map((agent) => agent.kind);
+
+/** Env variables that let `taskctl` recognise the session calling it. */
+export const SESSION_ENV_VARS = AGENTS
+  .map((agent) => agent.sessionEnvVar)
+  .filter((name) => typeof name === "string" && name.length > 0);

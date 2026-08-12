@@ -27,6 +27,11 @@ async function startServer(configure, listenOptions = {}) {
       async inspect() { return { available: false }; },
       async createTask() { throw new Error("Codex desktop is unavailable in this fixture"); },
     },
+    workbuddyDesktopController: {
+      async inspect() { return { available: false, port: null, detail: "" }; },
+      async createTask() { throw new Error("WorkBuddy is unavailable in this fixture"); },
+      async openSession() { throw new Error("WorkBuddy is unavailable in this fixture"); },
+    },
     ...options,
   });
   const address = await app.listen({ port: 0, ...listenOptions });
@@ -87,7 +92,11 @@ test("health and the default local project are available", async () => {
   assert.deepEqual(metadata.body, {
     manageTaskboardSkillPath: skillPath,
     taskctlShimPath: path.join(dataDirectory, "bin", "taskctl"),
-    capabilities: { localAiChat: true, nativeCodexTaskLaunch: false },
+    capabilities: {
+      localAiChat: true,
+      nativeCodexTaskLaunch: false,
+      workbuddyTaskLaunch: false,
+    },
   });
 
   const result = await request(baseUrl, "/api/projects");

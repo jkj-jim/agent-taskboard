@@ -396,6 +396,11 @@ test("native Codex launch failures return the actionable injector error", async 
         throw new Error("Timed out while selecting the manage-taskboard Skill");
       },
     },
+    workbuddyDesktopController: {
+      async inspect() { return { available: false, port: null, detail: "" }; },
+      async createTask() { throw new Error("WorkBuddy unavailable in fixture"); },
+      async openSession() { throw new Error("WorkBuddy unavailable in fixture"); },
+    },
   });
   try {
     const created = await request(fixture.baseUrl, "/api/tasks", {

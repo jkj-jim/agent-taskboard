@@ -32,7 +32,9 @@ import {
   listDeviceWorkspaces,
   listProjects,
   listTasks,
+  launchHostAgentTask,
   launchNativeCodexTask,
+  openHostAgentSession,
   moveTask as moveTaskRequest,
   removeTaskRelation,
   restoreTask as restoreTaskRequest,
@@ -49,6 +51,8 @@ import {
   agentLabel,
   agentNewSessionLink,
   agentSessionLink,
+  agentSessionOpenEndpoint,
+  agentTaskLaunchEndpoint,
 } from "./agents";
 import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
 import { AiChat } from "./components/AiChat";
@@ -1811,10 +1815,20 @@ export function App() {
     }
   }
 
-  function openThread(agentKind: AgentKind, threadId: string) {
+  async function openThread(agentKind: AgentKind, threadId: string) {
     // The Codex host owns its own routing when the board is embedded in it.
     if (agentKind === "codex" && embedded && window.parent !== window) {
       window.parent.postMessage({ type: "taskboard:open-thread", payload: { threadId } }, "*");
+      return;
+    }
+    // Agents without a URL scheme are reopened by the board driving the client.
+    const endpoint = agentSessionOpenEndpoint(agentKind, threadId);
+    if (endpoint) {
+      try {
+        await openHostAgentSession(endpoint);
+      } catch (error) {
+        setActionError(`无法打开 ${agentLabel(agentKind)} 会话：${errorMessage(error)}`);
+      }
       return;
     }
     const link = agentSessionLink(agentKind, threadId);
@@ -1849,6 +1863,30 @@ export function App() {
         ? [`本任务中的每一次 Taskboard 操作都使用 ${shellQuote(taskctlShim)}。`]
         : []),
     ].join("");
+
+    // Agents without a URL scheme are started by the board driving their own
+    // client, which also means the board writes the instruction rather than
+    // this prompt: it has to name the agent's board-access tools.
+    const launchEndpoint = agentTaskLaunchEndpoint(agentKind, task.id);
+    if (launchEndpoint) {
+      if (openingThreadTaskId) return;
+      setOpeningThreadTaskId(task.id);
+      setActionError(null);
+      try {
+        await launchHostAgentTask(
+          launchEndpoint,
+          task,
+          "manual",
+          "foreground",
+          taskAgentSessionId(task, agentKind),
+        );
+      } catch (error) {
+        setActionError(`无法在 ${agentLabel(agentKind)} 中开始这个任务：${errorMessage(error)}`);
+      } finally {
+        setOpeningThreadTaskId(null);
+      }
+      return;
+    }
 
     if (agentKind !== "codex") {
       const link = agentNewSessionLink(agentKind, { prompt, workspacePath });

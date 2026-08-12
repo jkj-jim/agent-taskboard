@@ -167,9 +167,113 @@ async function navigate(cdp, route) {
   })()`);
 }
 
+/**
+ * Expands the sidebar's projects section, since a collapsed one has no rows.
+ *
+ * A collapsed section cannot be recognised by the rows it holds, so it is found
+ * by its heading instead — matching any section with a heading would just as
+ * happily expand the tasks list.
+ */
+const EXPAND_PROJECT_SECTION_EXPRESSION = `(() => {
+  const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const section = Array.from(document.querySelectorAll('[data-app-action-sidebar-section]'))
+    .find((candidate) => {
+      if (candidate.querySelector('[data-app-action-sidebar-project-row]')) return true;
+      const heading = candidate.querySelector('[data-app-action-sidebar-section-heading]');
+      const label = normalize(
+        heading?.getAttribute('data-app-action-sidebar-section-heading') || heading?.textContent,
+      );
+      return label === 'projects' || label === '项目';
+    });
+  if (section?.getAttribute('data-app-action-sidebar-section-collapsed') === 'true') {
+    section.querySelector('[data-app-action-sidebar-section-toggle]')?.click();
+  }
+  return Boolean(section);
+})()`;
+
+function projectRowExpression(projectId, body) {
+  return `(() => {
+    const row = Array.from(document.querySelectorAll('[data-app-action-sidebar-project-row]'))
+      .find((candidate) => (
+        candidate.getAttribute('data-app-action-sidebar-project-id') === ${JSON.stringify(projectId)}
+      ));
+    ${body}
+  })()`;
+}
+
+/**
+ * Files the new thread under the task's project.
+ *
+ * The workspace root only decides which folder the session may touch; which
+ * project a thread belongs to is separate, sticky state. Without this step a
+ * launched task inherits whatever project was chosen last — and stays
+ * projectless when that was nothing.
+ *
+ * A project the board knows but Codex does not simply has no row; that is data,
+ * not a broken client, so the launch goes on with the workspace root alone. A
+ * row that refuses to become current is a real failure and says so.
+ */
+async function selectProject(cdp, projectId, timeoutMs) {
+  if (!projectId) return false;
+  await evaluate(cdp, EXPAND_PROJECT_SECTION_EXPRESSION);
+  const clicked = await evaluate(cdp, projectRowExpression(projectId, `
+    if (!row) return false;
+    if (row.getAttribute('aria-current') !== 'page') {
+      row.querySelector('[data-app-action-sidebar-select-project]')?.click();
+    }
+    return true;
+  `));
+  if (!clicked) return false;
+  await waitForValue(
+    () => evaluate(cdp, projectRowExpression(projectId, "return row?.getAttribute('aria-current') === 'page';")),
+    Boolean,
+    `Codex 没有选中任务所属的项目（${projectId}）`,
+    timeoutMs,
+  );
+  return true;
+}
+
+/**
+ * Which project the sidebar is currently showing.
+ *
+ * Opening a conversation moves `aria-current` onto the thread row, so the
+ * project cannot be read off the project rows alone. The open thread's own
+ * position in the tree is the reliable answer, with the project rows as a
+ * fallback for when nothing is open.
+ */
+function currentProjectId(cdp) {
+  return evaluate(cdp, `(() => {
+    const thread = document.querySelector(
+      '[data-app-action-sidebar-thread-active="true"],'
+      + '[data-app-action-sidebar-thread-id][aria-current="page"]'
+    );
+    const list = thread?.closest?.('[data-app-action-sidebar-project-list-id]');
+    if (list) return list.getAttribute('data-app-action-sidebar-project-list-id') || '';
+    const row = thread?.closest?.('[data-app-action-sidebar-project-row]')
+      || document.querySelector('[data-app-action-sidebar-project-row][aria-current="page"]')
+      || document.querySelector('[data-app-action-sidebar-project-row][data-app-action-sidebar-project-active="true"]');
+    return row?.getAttribute('data-app-action-sidebar-project-id') || '';
+  })()`);
+}
+
+/**
+ * Restoring the view is cosmetic, and it happens before the launch can answer
+ * the browser, so its budget is what the person waits for when it cannot
+ * succeed. A conversation that is going to come back does so in well under a
+ * second; anything longer is a restore that will not happen at all, and holding
+ * the response for it just turns a finished launch into a slow one.
+ */
+const RESTORE_TIMEOUT_MS = 2_000;
+
 async function restoreRoute(cdp, threadId) {
-  await navigate(cdp, threadId ? `/local/${encodeURIComponent(threadId)}` : "/");
-  if (!threadId) return;
+  // A sidebar row can expose a placeholder like `client-new-thread:<uuid>` for a
+  // conversation the client has not committed yet, and the fiber walk that
+  // usually resolves the real id comes back empty for it. Routing to one makes
+  // the client reject it — `invalid session id` — so anything that is not a
+  // conversation id sends the view home instead of nowhere.
+  const target = CODEX_THREAD_ID.test(threadId) ? threadId : "";
+  await navigate(cdp, target ? `/local/${encodeURIComponent(target)}` : "/");
+  if (!target) return;
   await waitForValue(
     () => evaluate(cdp, `(() => {
       const row = document.querySelector(
@@ -191,9 +295,23 @@ async function restoreRoute(cdp, threadId) {
       }
       return exposed;
     })()`),
-    (value) => value === threadId,
+    (value) => value === target,
     "Codex did not restore the previous task",
+    RESTORE_TIMEOUT_MS,
   );
+}
+
+/**
+ * Puts the client back where the person left it.
+ *
+ * The project has to come first: selecting the task's project narrows the
+ * sidebar to that project's threads, and a conversation from anywhere else
+ * cannot be reopened until the previous one is back — the client answers such a
+ * route with 「未找到对话」.
+ */
+async function restoreView(cdp, projectId, threadId) {
+  if (projectId) await selectProject(cdp, projectId, RESTORE_TIMEOUT_MS);
+  await restoreRoute(cdp, threadId);
 }
 
 async function renameNativeThread(cdp, threadId, title) {
@@ -333,7 +451,7 @@ export function createCodexDesktopController(options = {}) {
     }
   }
 
-  async function createTask({ workspacePath, instruction, skillPath, presentation, title }) {
+  async function createTask({ workspacePath, projectId, instruction, skillPath, presentation, title }) {
     if (!path.isAbsolute(workspacePath)) {
       throw new Error("Codex workspace path must be absolute");
     }
@@ -342,7 +460,10 @@ export function createCodexDesktopController(options = {}) {
     let snapshot = connected.capability ?? null;
     let began = false;
     let success = false;
+    // Read before anything is touched, so the view can be put back afterwards.
+    let previousProjectId = "";
     try {
+      previousProjectId = await currentProjectId(cdp);
       snapshot = await evaluate(cdp, CAPABILITY_EXPRESSION);
       if (!snapshot?.compatible) {
         throw new Error(capabilityFailureReason(snapshot));
@@ -376,6 +497,7 @@ export function createCodexDesktopController(options = {}) {
         });
         return true;
       })()`, { awaitPromise: true });
+      await selectProject(cdp, projectId);
       await navigate(cdp, "/");
 
       await waitForValue(
@@ -511,14 +633,20 @@ export function createCodexDesktopController(options = {}) {
       );
 
       await renameNativeThread(cdp, sessionId, title);
-      await restoreRoute(cdp, snapshot.activeThreadId);
+      // The task exists and is named from here on, and the board is about to
+      // bind it. Putting the view back is housekeeping: a client that will not
+      // navigate is not a reason to throw away a launch that succeeded, which
+      // would leave a live session attached to no task at all.
       success = true;
+      try {
+        await restoreView(cdp, previousProjectId, snapshot.activeThreadId);
+      } catch {}
       return { status: "started", sessionId };
     } finally {
       if (began) {
         if (!success) {
           try {
-            await restoreRoute(cdp, snapshot?.activeThreadId || "");
+            await restoreView(cdp, previousProjectId, snapshot?.activeThreadId || "");
           } catch {}
         }
         try {
@@ -579,6 +707,9 @@ export function createCodexTaskLaunchCoordinator({
     }
     return {
       workspacePath,
+      // The board and the Codex client key projects by the same id, so the
+      // sidebar row is found without a name lookup.
+      projectId: task.projectId,
       instruction,
       title: task.title,
       skillPath,

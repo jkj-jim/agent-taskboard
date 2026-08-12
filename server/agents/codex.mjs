@@ -27,6 +27,7 @@ export function createCodexAgent(config) {
     label: definition.label,
     actor: definition.actor,
     assigneeTarget: definition.assigneeTarget,
+    capabilities: definition.capabilities,
     executable,
     /** Codex mints the session id itself and reports it via `thread.started`. */
     preassignsSessionId: false,
