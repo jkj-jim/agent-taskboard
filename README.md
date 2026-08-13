@@ -95,7 +95,7 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 **在对话中打开。** 这是用户主动编辑入口：Codex Agent 会通过本机桥打开新的原生输入框，插入真实的 `$manage-taskboard` Skill mention 和任务指令，但不会自动发送。你可以修改或补充提示词，再自己点击发送。首次发送前 Codex 尚未生成正式会话 ID，因此看板不会提前绑定会话；Agent 后续通过 `taskctl` 写评论或任务时会自动记录当前会话。Claude Agent 继续走 `claude://code/new`，并把工作目录和预填指令一起带过去。远程 Cloud 页面不能直接控制桌面客户端，需要回到运行 Codex 的电脑操作。
 
-**在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此任务一开始就能关联和跳转。
+**在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此任务一开始就能关联和跳转。这类会话和你自己开的会话一样落在项目工作区下，在该目录里敲 `claude` 后 `/resume` 就能接着聊。
 
 **关联并唤起已有会话。** 任务详情下方列出该任务每个 Agent 的当前会话，点击即可在对应客户端中打开（Claude 走 `claude://resume?session=<id>`，会把该 CLI 会话导入桌面端）。旁边的「关联已有会话…」下拉列出该项目目录下的所有 Claude Code 会话（活跃的带 ●），可以把你自己开的会话挂到任务上。
 

@@ -267,7 +267,7 @@ export class AiChatService {
       // A pre-assigned id exists before its first turn does, so ask the agent
       // whether the session is actually resumable instead of assuming it is.
       const resuming = sessionId ? await agent.sessionExists(sessionId) : false;
-      const { args, cwd, prompt } = agent.buildTurn({
+      const { args, cwd, prompt, env: turnEnvOverlay } = agent.buildTurn({
         thread,
         addDirectories: resolved.addDirectories,
         imagePaths,
@@ -307,7 +307,7 @@ export class AiChatService {
         args,
         cwd,
         prompt,
-        env: await this.#turnEnv(),
+        env: { ...(await this.#turnEnv()), ...turnEnvOverlay },
         label: agent.label,
         onRawEvent: (raw) => {
           for (const normalized of decode(raw)) {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
 import { ApiError } from "../api";
 import {
   TASK_PRIORITIES,
@@ -33,6 +33,7 @@ import {
   InlineMediaComposer,
   inlineMediaImages,
   serializeInlineMedia,
+  type InlineMediaComposerHandle,
   type InlineMediaSegment,
   type PendingInlineImage,
 } from "./InlineMediaComposer";
@@ -116,6 +117,8 @@ export function TaskEditor({
 }: TaskEditorProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<InlineMediaComposerHandle>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
@@ -205,6 +208,18 @@ export function TaskEditor({
     }
   }
 
+  function handleTitleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    const textarea = descriptionRef.current;
+    if (textarea) {
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      return;
+    }
+    composerRef.current?.focus();
+  }
+
   function addAttachments(files: FileList | File[]) {
     const selected = Array.from(files);
     const oversized = selected.find((file) => file.size > MAX_ATTACHMENT_SIZE);
@@ -255,15 +270,16 @@ export function TaskEditor({
         <div className="form-body">
           <label className="composer-title">
             <span className="sr-only">标题</span>
-            <input ref={titleRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Task title" maxLength={240} autoComplete="off" />
+            <input ref={titleRef} value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={handleTitleKeyDown} placeholder="Task title" maxLength={240} autoComplete="off" />
           </label>
           {task ? (
             <label className="composer-description">
               <span className="sr-only">描述</span>
-              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add description…" rows={5} />
+              <textarea ref={descriptionRef} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add description…" rows={5} />
             </label>
           ) : (
             <InlineMediaComposer
+              ref={composerRef}
               className="composer-description inline-media-description"
               segments={descriptionSegments}
               placeholder="Add description…"

@@ -16,7 +16,8 @@ export { DEFAULT_AGENT_KIND };
  *   preassignsSessionId, createSessionId?, sessionExists(id)
  *   resolveWorkspace(projectId) -> { workspacePath, addDirectories, project }
  *   catalog(projectId)          -> { models, skills, sandboxes }
- *   buildTurn(input)            -> { args, cwd, prompt }
+ *   buildTurn(input)            -> { args, cwd, prompt, env? }
+ *                                 `env` overlays the shared turn environment
  *   createDecoder()             -> (rawEvent) => normalizedEvent[]
  *   resumeLink?(id), newSessionLink?(input)
  */

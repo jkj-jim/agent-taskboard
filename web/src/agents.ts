@@ -1,17 +1,16 @@
 import claudeCodeLogo from "@lobehub/icons-static-svg/icons/claudecode-color.svg";
-import tencentLogo from "@lobehub/icons-static-svg/icons/tencent-brand-color.svg";
 import { AGENTS, agentByActorId, agentByKind } from "../../shared/agents.mjs";
 import type { ActorIdentity, AgentKind } from "./types";
 
 export { AGENTS, agentByActorId, agentByKind };
 
 const CODEX_LOGO = "/codex-agent-logo.png";
+const WORKBUDDY_LOGO = "/workbuddy-agent-logo.png";
 
 const AGENT_LOGOS: Record<AgentKind, string> = {
   codex: CODEX_LOGO,
   claude: claudeCodeLogo,
-  // WorkBuddy ships no standalone mark here, so its vendor brand stands in.
-  workbuddy: tencentLogo,
+  workbuddy: WORKBUDDY_LOGO,
 };
 
 export function agentLabel(kind: AgentKind): string {

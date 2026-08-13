@@ -48,6 +48,23 @@ const SANDBOX_NOTES = {
   "danger-full-access": "与 workspace-write 相同：Claude Code 无沙箱隔离。",
 };
 
+/**
+ * Claude Code stamps every `-p` run as the `sdk-cli` entrypoint, and the
+ * interactive `/resume` picker deliberately hides sessions from the `sdk-*`
+ * family. Naming the board instead keeps board-run sessions listed in the CLI
+ * alongside hand-started ones — any value other than `cli` survives print mode
+ * untouched, and an unrecognised one is treated as a plain CLI run.
+ *
+ * Leaving the `sdk-*` family also un-gates the artifact tool and automatic
+ * memory consolidation, neither of which a headless turn has ever had. Pin both
+ * off so this stays a visibility change and nothing else.
+ */
+const TURN_ENV = {
+  CLAUDE_CODE_ENTRYPOINT: "agent-taskboard",
+  CLAUDE_CODE_ARTIFACT: "0",
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+};
+
 function cappedText(value, limit = 65_536) {
   return typeof value === "string" ? value.slice(0, limit) : "";
 }
@@ -289,7 +306,7 @@ export function createClaudeAgent(config) {
         "</user_message>",
       ].join("\n");
 
-      return { args, cwd: thread.origin.workspacePath, prompt };
+      return { args, cwd: thread.origin.workspacePath, prompt, env: TURN_ENV };
     },
 
     createDecoder() {
