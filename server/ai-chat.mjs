@@ -5,7 +5,8 @@ import path from "node:path";
 import { ApiError } from "./database.mjs";
 import { DEFAULT_AGENT_KIND, spawnAgentTurn } from "./agents/index.mjs";
 
-const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+/** The single sandbox tier every board-run turn uses; see `createThread`. */
+const FIXED_SANDBOX = "workspace-write";
 const ERROR_CONTENT_LIMIT = 65_536;
 const CODEX_IMAGE_TYPES = new Set([
   "image/gif",
@@ -50,10 +51,6 @@ export class AiChatService {
     this.active = new Map();
     this.listeners = new Map();
     this.completions = new Map();
-  }
-
-  listThreads() {
-    return this.database.listAiChatThreads();
   }
 
   getThread(threadId) {
@@ -119,8 +116,14 @@ export class AiChatService {
     const model = this.#resolveModel(catalog, input.model);
     const reasoningEffort = input.reasoningEffort ?? model.defaultReasoningEffort;
     this.#validateReasoningEffort(model, reasoningEffort);
-    const sandbox = input.sandbox ?? "workspace-write";
-    this.#validateSandbox(sandbox);
+    // One tier for everyone, and not a choice. The three tiers were named after
+    // Codex's approval model and the two agents never implemented them alike:
+    // Claude has no OS sandbox, so its middle and top tiers are the same
+    // full-access run, while Codex's `read-only` asks a reviewer that a headless
+    // turn has no way to answer. `workspace-write` is the one tier that means
+    // something on both — Codex sandboxes it and reviews itself, Claude runs it
+    // — and the one that always terminates.
+    const sandbox = FIXED_SANDBOX;
 
     let issue;
     if (input.issueId !== undefined) {
@@ -156,12 +159,11 @@ export class AiChatService {
 
   async updateThread(threadId, changes) {
     let thread = this.getThread(threadId);
-    const changesSettings = ["model", "reasoningEffort", "sandbox"].some(
+    const changesSettings = ["model", "reasoningEffort"].some(
       (key) => Object.hasOwn(changes, key),
     );
     const wasActive = changesSettings && this.#threadIsActive(thread);
 
-    if (Object.hasOwn(changes, "sandbox")) this.#validateSandbox(changes.sandbox);
     if (Object.hasOwn(changes, "model") || Object.hasOwn(changes, "reasoningEffort")) {
       const catalog = await this.getCatalog(thread.origin.projectId, thread.agentKind);
       thread = this.getThread(threadId);
@@ -451,16 +453,6 @@ export class AiChatService {
         400,
         "INVALID_REASONING_EFFORT",
         `Reasoning effort '${reasoningEffort}' is not supported by model '${model.slug}'`,
-      );
-    }
-  }
-
-  #validateSandbox(sandbox) {
-    if (!SANDBOXES.has(sandbox)) {
-      throw new ApiError(
-        400,
-        "INVALID_SANDBOX",
-        "'sandbox' must be read-only, workspace-write, or danger-full-access",
       );
     }
   }

@@ -15,12 +15,9 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  createAiChatThread,
-  deleteAiChatThread,
   getAiChatCatalog,
   getAiChatThread,
   interruptAiChatRun,
-  listAiChatThreads,
   startAiChatTurn,
   subscribeAiChatThread,
   updateAiChatThread,
@@ -28,12 +25,10 @@ import {
 import {
   AI_CHAT_SKILL_MARKER,
   aiChatEventStatus,
-  buildThreadCreateInput,
   buildTurnInput,
   chatPrimaryAction,
   createAiSnapshotRefreshQueue,
   filterVisibleAiEvents,
-  needsDangerConfirmation,
   normalizeChatSelection,
   parseAiChatComposerFragment,
   patchAiChatSnapshot,
@@ -45,26 +40,26 @@ import type {
   AiChatAttachmentInput,
   AiChatModel,
   AiChatRun,
-  AiChatSandbox,
   AiChatSkill,
   AiChatThread,
   AiChatThreadSnapshot,
 } from "../types";
 import { LinearIcon, type LinearIconName } from "./LinearIcon";
+import { agentLabel } from "../agents";
 
+/**
+ * The transcript of one board-run agent turn, opened from the task that owns it.
+ *
+ * There is no conversation to start here and no list to browse: a thread exists
+ * because a task was dispatched to an agent the board can run, and this is where
+ * that run is watched and answered.
+ */
 interface AiChatProps {
-  available: boolean;
-  projectId: string | null;
-  issueId: string | null;
+  threadId: string;
+  onClose: () => void;
 }
 
-type MenuName = "model" | "model-list" | "effort-list" | "sandbox" | null;
-type PendingDangerInput = {
-  message: string;
-  skillIds: string[];
-  attachments: AiChatAttachmentInput[];
-  clearSubmittedDraft: boolean;
-};
+type MenuName = "model" | "model-list" | "effort-list" | null;
 type ComposerAttachment = AiChatAttachmentInput & {
   id: string;
   previewUrl?: string;
@@ -82,10 +77,6 @@ type ComposerBeforeInput = {
   offset: number;
   text: string;
 };
-type DraftThreadOrigin = {
-  projectId: string;
-  issueId: string | null;
-};
 type PanelResizeEdge = "top" | "left" | "top-left";
 type PanelGeometry = {
   width: number;
@@ -102,7 +93,6 @@ type PanelResizeSession = {
   captureTarget: HTMLElement;
 };
 
-const LAST_THREAD_KEY = "taskboard.aiChat.lastThreadId";
 const PANEL_GEOMETRY_KEY = "taskboard.aiChat.panelGeometry";
 const PANEL_EDGE_GAP = 8;
 const PANEL_MIN_WIDTH = 420;
@@ -132,12 +122,6 @@ const COMPOSER_HTML_BLOCKS = new Set([
   "SECTION",
 ]);
 const COMPOSER_HTML_IGNORED = new Set(["SCRIPT", "STYLE", "SVG"]);
-const SANDBOX_LABELS: Record<AiChatSandbox, string> = {
-  "read-only": "请求批准",
-  "workspace-write": "替我审批",
-  "danger-full-access": "完全访问权限",
-};
-
 function clampPanelGeometry(geometry: PanelGeometry): PanelGeometry {
   const maxWidth = Math.min(
     PANEL_MAX_WIDTH,
@@ -168,18 +152,6 @@ function loadPanelGeometry(): PanelGeometry {
     return clampPanelGeometry(PANEL_DEFAULT_GEOMETRY);
   }
 }
-
-const SANDBOX_DESCRIPTIONS: Record<AiChatSandbox, string> = {
-  "read-only": "编辑外部文件和使用互联网时始终询问",
-  "workspace-write": "仅对检测到的风险操作请求批准",
-  "danger-full-access": "不受限制地访问互联网和您电脑上的任何文件",
-};
-
-const SANDBOX_ICONS: Record<AiChatSandbox, "hand" | "terminal" | "shieldAlert"> = {
-  "read-only": "hand",
-  "workspace-write": "terminal",
-  "danger-full-access": "shieldAlert",
-};
 
 const EFFORT_LABELS: Record<string, string> = {
   low: "低",
@@ -585,23 +557,6 @@ function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : "AI 对话暂时不可用";
 }
 
-function isAiChatSandbox(value: string): value is AiChatSandbox {
-  return value === "read-only"
-    || value === "workspace-write"
-    || value === "danger-full-access";
-}
-
-function dateLabel(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
 type ThinkingActivityDetail =
   | { kind: "lines"; summary: string; value: string[] }
   | { kind: "pre"; summary: string; value: string };
@@ -943,16 +898,10 @@ function OptionMenu({
   );
 }
 
-export function AiChat({ available, projectId, issueId }: AiChatProps) {
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+export function AiChat({ threadId, onClose }: AiChatProps) {
+  const selectedThreadId = threadId;
   const [menu, setMenu] = useState<MenuName>(null);
-  const [threads, setThreads] = useState<AiChatThread[]>([]);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(
-    () => window.localStorage.getItem(LAST_THREAD_KEY),
-  );
   const [snapshot, setSnapshot] = useState<AiChatThreadSnapshot | null>(null);
-  const [draftOrigin, setDraftOrigin] = useState<DraftThreadOrigin | null>(null);
   const [catalog, setCatalog] = useState<AiChatCatalog | null>(null);
   const [catalogLoadedProjectId, setCatalogLoadedProjectId] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -964,13 +913,9 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [skillMention, setSkillMention] = useState<ComposerSkillQuery | null>(null);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [composerSkillTokens, setComposerSkillTokens] = useState<ComposerSkillToken[]>([]);
-  const [pendingDangerInput, setPendingDangerInput] = useState<PendingDangerInput | null>(null);
-  const [unread, setUnread] = useState(false);
   const [draftModel, setDraftModel] = useState("");
   const [draftEffort, setDraftEffort] = useState("");
-  const [draftSandbox, setDraftSandbox] = useState<AiChatSandbox>("workspace-write");
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [panelGeometry, setPanelGeometry] = useState<PanelGeometry | null>(
     () => window.innerWidth <= 719 ? null : loadPanelGeometry(),
@@ -984,32 +929,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const panelResizeSessionRef = useRef<PanelResizeSession | null>(null);
-  const selectedThreadRef = useRef(selectedThreadId);
-  const draftReturnThreadIdRef = useRef<string | null>(null);
-  const panelOpenRef = useRef(panelOpen);
   const snapshotRequestRef = useRef(0);
   const snapshotLoadingRequestRef = useRef(0);
-  const observedRunStatusesRef = useRef(new Map<string, AiChatRun["status"]>());
-  const dangerConfirmOpen = pendingDangerInput !== null;
-
-  const selectThread = useCallback((threadId: string | null) => {
-    selectedThreadRef.current = threadId;
-    setSelectedThreadId(threadId);
-  }, []);
-
-  useEffect(() => {
-    selectedThreadRef.current = selectedThreadId;
-    if (selectedThreadId) window.localStorage.setItem(LAST_THREAD_KEY, selectedThreadId);
-    else window.localStorage.removeItem(LAST_THREAD_KEY);
-  }, [selectedThreadId]);
-
-  useEffect(() => {
-    panelOpenRef.current = panelOpen;
-    if (panelOpen) {
-      setUnread(false);
-      setPanelGeometry(window.innerWidth <= 719 ? null : loadPanelGeometry());
-    }
-  }, [panelOpen]);
 
   useEffect(() => {
     function finishPanelResize(pointerId?: number) {
@@ -1122,27 +1043,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     setPanelResizeEdge(edge);
   }
 
-  const replaceThread = useCallback((thread: AiChatThread) => {
-    setThreads((current) => {
-      const next = current.filter((candidate) => candidate.id !== thread.id);
-      return [thread, ...next].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    });
-  }, []);
-
-  const observeRunTransitions = useCallback((runs: AiChatRun[]) => {
-    let completedWhileClosed = false;
-    for (const run of runs) {
-      const previous = observedRunStatusesRef.current.get(run.id);
-      observedRunStatusesRef.current.set(run.id, run.status);
-      if (
-        previous === "running"
-        && run.status !== "running"
-        && !panelOpenRef.current
-      ) completedWhileClosed = true;
-    }
-    if (completedWhileClosed) setUnread(true);
-  }, []);
-
   const loadSnapshot = useCallback(async (threadId: string, quiet = false) => {
     const requestId = ++snapshotRequestRef.current;
     if (!quiet) {
@@ -1151,51 +1051,21 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }
     try {
       const next = await getAiChatThread(threadId);
-      if (requestId !== snapshotRequestRef.current || selectedThreadRef.current !== threadId) return;
+      if (requestId !== snapshotRequestRef.current) return;
       setSnapshot(next);
-      replaceThread(next.thread);
-      observeRunTransitions(next.runs);
       if (!quiet) setError(null);
     } catch (nextError) {
-      if (
-        !quiet
-        && requestId === snapshotRequestRef.current
-        && selectedThreadRef.current === threadId
-      ) setError(messageFor(nextError));
+      if (!quiet && requestId === snapshotRequestRef.current) setError(messageFor(nextError));
     } finally {
       if (!quiet && requestId === snapshotLoadingRequestRef.current) setLoading(false);
     }
-  }, [observeRunTransitions, replaceThread]);
+  }, []);
 
   const selectedHintRefreshQueue = useMemo(
     () => createAiSnapshotRefreshQueue((threadId) => loadSnapshot(threadId, true)),
     [loadSnapshot],
   );
   useEffect(() => () => selectedHintRefreshQueue.clear(), [selectedHintRefreshQueue]);
-
-  const loadThreads = useCallback(async () => {
-    try {
-      const next = await listAiChatThreads();
-      setThreads(next);
-      setSelectedThreadId((current) => {
-        const selected = current && next.some((thread) => thread.id === current)
-          ? current
-          : next[0]?.id ?? null;
-        selectedThreadRef.current = selected;
-        return selected;
-      });
-    } catch (nextError) {
-      setError(messageFor(nextError));
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!available) {
-      setPanelOpen(false);
-      return;
-    }
-    void loadThreads();
-  }, [available, loadThreads]);
 
   useEffect(() => {
     setSnapshot(null);
@@ -1222,44 +1092,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     };
   }, [loadSnapshot, selectedHintRefreshQueue, selectedThreadId]);
 
-  const backgroundRunningThreadIds = threads
-    .filter((thread) => thread.status === "running" && thread.id !== selectedThreadId)
-    .map((thread) => thread.id);
-  useEffect(() => {
-    if (!available || backgroundRunningThreadIds.length === 0) return;
-    const refresh = async (threadId: string) => {
-      try {
-        const next = await getAiChatThread(threadId);
-        replaceThread(next.thread);
-        observeRunTransitions(next.runs);
-      } catch {
-        // The selected thread surfaces request errors; background history refresh stays quiet.
-      }
-    };
-    const refreshQueue = createAiSnapshotRefreshQueue(refresh);
-    const unsubscribers = backgroundRunningThreadIds.map((threadId) => (
-      subscribeAiChatThread(threadId, () => void refreshQueue.request(threadId))
-    ));
-    return () => {
-      refreshQueue.clear();
-      for (const unsubscribe of unsubscribers) unsubscribe();
-    };
-  }, [
-    available,
-    backgroundRunningThreadIds.join(","),
-    observeRunTransitions,
-    replaceThread,
-    selectedThreadId,
-  ]);
-
-  const selectedThreadSummary = threads.find((thread) => thread.id === selectedThreadId) ?? null;
-  const catalogProjectId = snapshot?.thread.origin.projectId
-    ?? selectedThreadSummary?.origin.projectId
-    ?? draftOrigin?.projectId
-    ?? projectId;
+  const catalogProjectId = snapshot?.thread.origin.projectId ?? null;
   const activeCatalog = catalogLoadedProjectId === catalogProjectId ? catalog : null;
   useEffect(() => {
-    if (!available || !catalogProjectId) {
+    if (!catalogProjectId) {
       setCatalog(null);
       setCatalogLoadedProjectId(null);
       setCatalogError(null);
@@ -1286,58 +1122,34 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       },
     );
     return () => controller.abort();
-  }, [available, catalogProjectId]);
-
-  const restoreDraftSettings = useCallback((thread: AiChatThread) => {
-    setDraftModel(thread.model);
-    setDraftEffort(thread.reasoningEffort);
-    setDraftSandbox(thread.sandbox);
-  }, []);
+  }, [catalogProjectId]);
 
   useEffect(() => {
     const thread = snapshot?.thread;
-    if (thread) {
-      restoreDraftSettings(thread);
-      return;
-    }
-    const normalized = normalizeChatSelection(activeCatalog?.models ?? [], draftModel, draftEffort);
-    if (normalized) {
-      setDraftModel(normalized.model);
-      setDraftEffort(normalized.reasoningEffort);
-    }
-    const sandbox = draftOrigin && activeCatalog?.sandboxes.includes(draftSandbox)
-      ? draftSandbox
-      : activeCatalog?.sandboxes.find(
-          (candidate): candidate is AiChatSandbox => candidate === "workspace-write",
-        ) ?? activeCatalog?.sandboxes.find(isAiChatSandbox);
-    if (sandbox) setDraftSandbox(sandbox);
-  }, [activeCatalog, draftOrigin, restoreDraftSettings, snapshot?.thread.id]);
+    if (!thread) return;
+    setDraftModel(thread.model);
+    setDraftEffort(thread.reasoningEffort);
+  }, [snapshot?.thread.id, snapshot?.thread.model, snapshot?.thread.reasoningEffort]);
 
   useEffect(() => {
     const container = messagesRef.current;
-    if (!container || !panelOpen) return;
+    if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [panelOpen, snapshot?.events.length, snapshot?.thread.status]);
+  }, [snapshot?.events.length, snapshot?.thread.status]);
 
   useEffect(() => {
-    if (!panelOpen) return;
     function closeWithEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-      if (dangerConfirmOpen) setPendingDangerInput(null);
-      else if (skillMention) setSkillMention(null);
+      if (skillMention) setSkillMention(null);
       else if (menu) setMenu(null);
-      else if (historyOpen) setHistoryOpen(false);
-      else {
-        restorePersistedConversationFromDraft();
-        setPanelOpen(false);
-      }
+      else onClose();
     }
     document.addEventListener("keydown", closeWithEscape, true);
     return () => document.removeEventListener("keydown", closeWithEscape, true);
-  }, [dangerConfirmOpen, draftOrigin, historyOpen, menu, panelOpen, skillMention, threads]);
+  }, [menu, onClose, skillMention]);
 
   const visibleSkills = useMemo(
     () => (activeCatalog?.skills ?? []).filter((skill) => (
@@ -1354,28 +1166,18 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     [activeCatalog?.skills, skillMention?.query],
   );
   const selectedModel = activeCatalog?.models.find((model) => model.slug === draftModel) ?? null;
-  const availableSandboxes = (activeCatalog?.sandboxes ?? []).filter(isAiChatSandbox);
   const currentRun = snapshot?.thread.currentRun
     ?? snapshot?.runs.find((run) => run.status === "running")
     ?? null;
-  const composerBlocked = Boolean(
-    selectedThreadId && deletingThreadId === selectedThreadId,
-  );
-  const sendBlocked = loading
-    || settingsSaving
-    || composerBlocked
-    || Boolean(selectedThreadId && !snapshot);
-  const threadSettingsBlocked = loading || Boolean(selectedThreadId && !snapshot);
-  const attachmentBlocked = composerBlocked;
+  const sendBlocked = loading || settingsSaving || !snapshot;
+  const threadSettingsBlocked = loading || !snapshot;
+  const attachmentBlocked = !snapshot;
   const primaryAction = chatPrimaryAction(
     snapshot?.thread.status ?? "idle",
     draft,
     sendBlocked,
     attachments.length > 0,
   );
-  const anyRunning = threads.some((thread) => thread.status === "running");
-  const anyFailed = threads.some((thread) => thread.status === "failed");
-  const launcherState = anyRunning ? "running" : anyFailed ? "failed" : unread ? "unread" : "idle";
   const lastUserEvent = snapshot?.thread.status === "failed"
     ? [...snapshot.events].reverse().find((event) => (
         event.role === "user"
@@ -1416,148 +1218,25 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     setSkillIds([]);
     setComposerSkillTokens([]);
     setSkillMention(null);
-    setPendingDangerInput(null);
     setAttachmentDragActive(false);
     skillMentionRangeRef.current = null;
-  }
-
-  function restorePersistedConversationFromDraft() {
-    if (!draftOrigin) return;
-    const previousThreadId = draftReturnThreadIdRef.current;
-    const nextThreadId = previousThreadId && threads.some((thread) => thread.id === previousThreadId)
-      ? previousThreadId
-      : threads[0]?.id ?? null;
-    draftReturnThreadIdRef.current = null;
-    setDraftOrigin(null);
-    setSnapshot(null);
-    selectThread(nextThreadId);
-    resetComposer();
-  }
-
-  useEffect(() => {
-    if (
-      !draftOrigin
-      || (
-        draftOrigin.projectId === projectId
-        && draftOrigin.issueId === (issueId ?? null)
-      )
-    ) return;
-    restorePersistedConversationFromDraft();
-  }, [draftOrigin?.issueId, draftOrigin?.projectId, issueId, projectId]);
-
-  function beginNewConversation() {
-    const input = buildThreadCreateInput(projectId ?? "", issueId);
-    if (!input) {
-      setError("请先进入一个已映射的项目，再新建对话");
-      return;
-    }
-    if (!draftOrigin) draftReturnThreadIdRef.current = selectedThreadRef.current;
-    resetComposer();
-    setDraftOrigin({
-      projectId: input.projectId,
-      issueId: input.issueId ?? null,
-    });
-    setSnapshot(null);
-    selectThread(null);
-    setHistoryOpen(false);
-    setMenu(null);
-    setError(null);
-  }
-
-  async function createThreadForDraftOrigin(): Promise<AiChatThread | null> {
-    const origin = draftOrigin ?? (
-      projectId ? { projectId, issueId } : null
-    );
-    const input = buildThreadCreateInput(origin?.projectId ?? "", origin?.issueId ?? null);
-    if (!input) {
-      setError("请先进入一个已映射的项目，再新建对话");
-      return null;
-    }
-    const inheritedSettings = {
-      model: draftModel,
-      reasoningEffort: draftEffort,
-      sandbox: draftSandbox,
-    };
-    setLoading(true);
-    try {
-      const targetCatalog = catalogLoadedProjectId === input.projectId && activeCatalog
-        ? activeCatalog
-        : await getAiChatCatalog(input.projectId);
-      const normalized = normalizeChatSelection(
-        targetCatalog.models,
-        inheritedSettings.model,
-        inheritedSettings.reasoningEffort,
-      );
-      const sandbox = targetCatalog.sandboxes.includes(inheritedSettings.sandbox)
-        ? inheritedSettings.sandbox
-        : targetCatalog.sandboxes.find(
-          (candidate): candidate is AiChatSandbox => candidate === "workspace-write",
-        ) ?? targetCatalog.sandboxes.find(isAiChatSandbox) ?? inheritedSettings.sandbox;
-      const settings = {
-        model: normalized?.model ?? inheritedSettings.model,
-        reasoningEffort: normalized?.reasoningEffort ?? inheritedSettings.reasoningEffort,
-        sandbox,
-      };
-      const thread = await createAiChatThread({
-        ...input,
-        ...settings,
-      });
-      replaceThread(thread);
-      selectThread(thread.id);
-      setSnapshot({ thread, events: [], runs: [] });
-      draftReturnThreadIdRef.current = null;
-      setDraftOrigin(null);
-      setHistoryOpen(false);
-      setError(null);
-      return thread;
-    } catch (nextError) {
-      setError(messageFor(nextError));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function deleteThread(thread: AiChatThread) {
-    if (!window.confirm(`删除本地对话“${thread.title}”？`)) return;
-    setDeletingThreadId(thread.id);
-    try {
-      await deleteAiChatThread(thread.id);
-      const remainingThreads = threads.filter((candidate) => candidate.id !== thread.id);
-      setThreads(remainingThreads);
-      if (selectedThreadRef.current === thread.id) {
-        setSnapshot(null);
-        setDraftOrigin(null);
-        selectThread(remainingThreads[0]?.id ?? null);
-        resetComposer();
-      }
-      setError(null);
-    } catch (nextError) {
-      setError(messageFor(nextError));
-    } finally {
-      setDeletingThreadId(null);
-    }
   }
 
   async function saveThreadSettings(changes: {
     model?: string;
     reasoningEffort?: string;
-    sandbox?: AiChatSandbox;
   }) {
     const previousThread = snapshot?.thread;
     if (!previousThread) return;
-    const threadId = previousThread.id;
     setSettingsSaving(true);
     try {
-      const thread = await updateAiChatThread(threadId, changes);
-      setSnapshot((current) => patchAiChatSnapshot(current, threadId, thread));
-      replaceThread(thread);
-      if (selectedThreadRef.current === threadId) setError(null);
+      const thread = await updateAiChatThread(previousThread.id, changes);
+      setSnapshot((current) => patchAiChatSnapshot(current, previousThread.id, thread));
+      setError(null);
     } catch (nextError) {
-      if (selectedThreadRef.current === threadId) {
-        restoreDraftSettings(previousThread);
-        setError(messageFor(nextError));
-      }
+      setDraftModel(previousThread.model);
+      setDraftEffort(previousThread.reasoningEffort);
+      setError(messageFor(nextError));
     } finally {
       setSettingsSaving(false);
     }
@@ -1578,12 +1257,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     setMenu(null);
     setDraftEffort(reasoningEffort);
     await saveThreadSettings({ reasoningEffort });
-  }
-
-  async function chooseSandbox(sandbox: AiChatSandbox) {
-    setMenu(null);
-    setDraftSandbox(sandbox);
-    await saveThreadSettings({ sandbox });
   }
 
   function syncComposerState() {
@@ -1751,52 +1424,25 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       dataBase64: attachment.dataBase64,
     }));
     if (!trimmed && messageAttachments.length === 0) return;
-    let thread = snapshot?.thread ?? null;
-    const creatingThread = !thread;
-    const messageSandbox = thread?.sandbox ?? draftSandbox;
-    if (needsDangerConfirmation(messageSandbox, dangerConfirmed)) {
-      setPendingDangerInput({
-        message: trimmed,
-        skillIds: submittedSkillIds,
-        attachments: messageAttachments,
-        clearSubmittedDraft,
-      });
-      return;
-    }
-    if (creatingThread && clearSubmittedDraft) resetComposer();
-    if (!thread) thread = await createThreadForDraftOrigin();
+    const thread = snapshot?.thread ?? null;
     if (!thread) return;
     const messageSkillIds = (
       boundSkillIds !== undefined || catalogLoadedProjectId === thread.origin.projectId
     ) ? submittedSkillIds : [];
-    setPendingDangerInput(null);
     setError(null);
     try {
-      const turnInput = buildTurnInput(
-        trimmed,
-        messageSkillIds,
-        dangerConfirmed,
-        messageAttachments,
-      );
-      if (clearSubmittedDraft && !creatingThread) {
-        resetComposer();
-      }
+      const turnInput = buildTurnInput(trimmed, messageSkillIds, messageAttachments);
+      if (clearSubmittedDraft) resetComposer();
       const run = await startAiChatTurn(thread.id, turnInput);
-      observedRunStatusesRef.current.set(run.id, run.status);
       setSnapshot((current) => current?.thread.id === thread.id ? {
           ...current,
           thread: { ...current.thread, status: "running", currentRun: run },
           runs: [run, ...current.runs.filter((candidate) => candidate.id !== run.id)],
         } : current);
-      replaceThread({ ...thread, status: "running", currentRun: run });
-      if (selectedThreadRef.current === thread.id) {
-        void selectedHintRefreshQueue.request(thread.id);
-      }
+      void selectedHintRefreshQueue.request(thread.id);
     } catch (nextError) {
-      if (selectedThreadRef.current === thread.id) setError(messageFor(nextError));
-      if (selectedThreadRef.current === thread.id) {
-        void selectedHintRefreshQueue.request(thread.id);
-      }
+      setError(messageFor(nextError));
+      void selectedHintRefreshQueue.request(thread.id);
     }
   }
 
@@ -1971,17 +1617,14 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     if (!run) return;
     try {
       await interruptAiChatRun(run.id);
-      if (selectedThreadRef.current === run.threadId) {
-        void selectedHintRefreshQueue.request(run.threadId);
-      }
+      void selectedHintRefreshQueue.request(run.threadId);
     } catch (nextError) {
-      if (selectedThreadRef.current === run.threadId) setError(messageFor(nextError));
+      setError(messageFor(nextError));
     }
   }
 
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (composerBlocked) return;
     if (event.key === "Enter" && event.shiftKey) return;
     if (event.key === "Backspace") {
       const token = editorRef.current ? tokenBeforeComposerCaret(editorRef.current) : null;
@@ -2015,22 +1658,20 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }
   }
 
-  if (!available) return null;
-
   return (
     <div
-      className={`ai-chat-root is-${launcherState}`}
+      className="ai-chat-root"
       onPointerDown={(event) => {
         if (!(event.target as HTMLElement).closest(".ai-chat-menu-wrap")) setMenu(null);
       }}
     >
-      {panelOpen && (
+      {(
         <section
           ref={panelRef}
           className={`ai-chat-panel${panelResizeEdge ? ` is-resizing-${panelResizeEdge}` : ""}`}
           style={panelGeometry ?? undefined}
-          aria-label="Codex AI 对话"
-          data-screen-label="Codex AI 对话"
+          aria-label={`${snapshot?.thread.title ?? "任务"} 的对话记录`}
+          data-screen-label="任务对话记录"
         >
           <div
             className="ai-chat-resize-handle is-top"
@@ -2049,83 +1690,20 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
           />
           <header className="ai-chat-panel-header">
             <div className="ai-chat-panel-title">
-              <strong>{snapshot?.thread.title ?? "新对话"}</strong>
-              <span>{snapshot?.thread.origin.projectName ?? "选择对话或从当前项目新建"}</span>
+              <strong>{snapshot?.thread.title ?? "对话"}</strong>
+              <span>
+                {snapshot ? `${agentLabel(snapshot.thread.agentKind)} · ${snapshot.thread.origin.projectName}` : "正在打开…"}
+              </span>
             </div>
             <button
               type="button"
-              aria-label="对话历史"
-              aria-pressed={historyOpen}
-              title="对话历史"
-              onClick={() => { setHistoryOpen((current) => !current); setMenu(null); }}
-            >
-              <LinearIcon name="conversation" />
-            </button>
-            <button
-              type="button"
-              aria-label="新建对话"
-              title={projectId ? "新建对话" : "请先进入项目"}
-              disabled={!projectId || loading}
-              onClick={beginNewConversation}
-            >
-              <LinearIcon name="plus" />
-            </button>
-            <button
-              type="button"
-              aria-label="关闭 AI 对话"
+              aria-label="关闭对话"
               title="关闭"
-              onClick={() => {
-                restorePersistedConversationFromDraft();
-                setPanelOpen(false);
-              }}
+              onClick={onClose}
             >
               <LinearIcon name="close" />
             </button>
           </header>
-
-          {historyOpen && (
-            <div className="ai-chat-history" aria-label="对话历史">
-              <div className="ai-chat-history-heading">
-                <strong>对话历史</strong>
-                <span>{threads.length}</span>
-              </div>
-              {threads.length > 0 ? threads.map((thread) => (
-                <div
-                  className={`ai-chat-history-row${thread.id === selectedThreadId ? " is-active" : ""}`}
-                  key={thread.id}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (thread.id !== selectedThreadRef.current) resetComposer();
-                      draftReturnThreadIdRef.current = null;
-                      setDraftOrigin(null);
-                      selectThread(thread.id);
-                      setHistoryOpen(false);
-                    }}
-                  >
-                    <span className={`ai-chat-thread-status is-${thread.status}`} aria-hidden="true" />
-                    <span>
-                      <strong>{thread.title}</strong>
-                      <small>{thread.origin.projectName} · {dateLabel(thread.updatedAt)}</small>
-                    </span>
-                  </button>
-                  <button
-                    className="ai-chat-history-delete"
-                    type="button"
-                    aria-label={`删除对话 ${thread.title}`}
-                    title="删除本地记录"
-                    disabled={thread.status === "running" || deletingThreadId === thread.id}
-                    onClick={() => void deleteThread(thread)}
-                  >
-                    <LinearIcon name="trash" />
-                  </button>
-                </div>
-              )) : (
-                <p>还没有本地对话</p>
-              )}
-            </div>
-          )}
 
           <div
             className="ai-chat-messages"
@@ -2145,7 +1723,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 {snapshot.thread.status === "running" && (
                   <div className="ai-chat-running" role="status">
                     <span className="ai-chat-spinner" />
-                    Codex 正在处理
+                    {agentLabel(snapshot.thread.agentKind)} 正在处理
                   </div>
                 )}
                 {retryableUserEvent && (
@@ -2170,10 +1748,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             ) : (
               <div className="ai-chat-empty">
                 <LinearIcon name="conversation" />
-                <strong>{projectId ? "在当前项目中开始对话" : "打开一个历史对话"}</strong>
-                <p>{projectId
-                  ? "Codex 会在新对话创建时记住当前项目。"
-                  : "进入项目后可以新建对话。"}</p>
+                <strong>这个对话打不开</strong>
+                <p>它可能已经被删除。</p>
               </div>
             )}
           </div>
@@ -2230,10 +1806,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               <div
                 ref={editorRef}
                 className="ai-chat-composer-editor"
-                contentEditable={!composerBlocked}
-                data-placeholder="询问 Codex"
+                contentEditable={Boolean(snapshot)}
+                data-placeholder={`回复 ${snapshot ? agentLabel(snapshot.thread.agentKind) : "Agent"}`}
                 role="textbox"
-                aria-label="发送给 Codex 的消息"
+                aria-label={`发送给 ${snapshot ? agentLabel(snapshot.thread.agentKind) : "Agent"}的消息`}
                 aria-multiline="true"
                 suppressContentEditableWarning
                 onBeforeInput={(event) => rememberComposerBeforeInput(event.nativeEvent as InputEvent)}
@@ -2334,57 +1910,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               >
                 <LinearIcon name="plus" />
               </button>
-              <div className="ai-chat-menu-wrap ai-chat-permission-menu-wrap">
-                <button
-                  className="ai-chat-permission-trigger"
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={menu === "sandbox"}
-                  disabled={
-                    !activeCatalog
-                    || snapshot?.thread.status === "running"
-                    || settingsSaving
-                    || threadSettingsBlocked
-                  }
-                  onClick={() => setMenu((current) => current === "sandbox" ? null : "sandbox")}
-                >
-                  <LinearIcon name={SANDBOX_ICONS[draftSandbox]} />
-                  {SANDBOX_LABELS[draftSandbox]}
-                  <LinearIcon name="chevronDown" />
-                </button>
-                {menu === "sandbox" && (
-                  <div className="ai-chat-option-menu ai-chat-permission-menu" role="menu" aria-label="执行权限">
-                    <header>
-                      <span>应如何批准 Codex 操作？</span>
-                      <a
-                        href="https://developers.openai.com/codex/security"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        了解更多
-                      </a>
-                    </header>
-                    {availableSandboxes.map((sandbox) => (
-                      <button
-                        className={sandbox === "danger-full-access" ? "is-danger" : undefined}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={sandbox === draftSandbox}
-                        key={sandbox}
-                        onClick={() => void chooseSandbox(sandbox)}
-                      >
-                        <LinearIcon name={SANDBOX_ICONS[sandbox]} />
-                        <span>
-                          <strong>{SANDBOX_LABELS[sandbox]}</strong>
-                          <small>{SANDBOX_DESCRIPTIONS[sandbox]}</small>
-                        </span>
-                        {sandbox === draftSandbox && <LinearIcon name="check" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
               <span className="ai-chat-toolbar-spacer" />
               <div className="ai-chat-menu-wrap ai-chat-model-menu-wrap">
                 <button
@@ -2502,48 +2027,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             </div>
           </div>
 
-          {dangerConfirmOpen && (
-            <div className="ai-chat-confirm-backdrop">
-              <div className="ai-chat-confirm" role="alertdialog" aria-modal="true" aria-labelledby="ai-chat-confirm-title">
-                <strong id="ai-chat-confirm-title">允许完全访问？</strong>
-                <p>本次消息允许 Codex 访问工作区之外的文件和命令。确认只对本次发送生效。</p>
-                <div>
-                  <button type="button" onClick={() => setPendingDangerInput(null)}>取消</button>
-                  <button
-                    className="is-danger"
-                    type="button"
-                    onClick={() => {
-                      if (!pendingDangerInput) return;
-                      void startMessage(
-                        pendingDangerInput.message,
-                        true,
-                        pendingDangerInput.skillIds,
-                        pendingDangerInput.clearSubmittedDraft,
-                        pendingDangerInput.attachments,
-                      );
-                    }}
-                  >
-                    允许并发送
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </section>
-      )}
-
-      {!panelOpen && (
-        <button
-          type="button"
-          className={`ai-chat-launcher is-${launcherState}`}
-          aria-label="打开 AI 对话"
-          aria-expanded="false"
-          title="AI 对话"
-          onClick={() => setPanelOpen(true)}
-        >
-          <LinearIcon name="conversation" />
-          {launcherState !== "idle" && <span className="ai-chat-launcher-state" aria-hidden="true" />}
-        </button>
       )}
     </div>
   );

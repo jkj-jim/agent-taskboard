@@ -102,9 +102,17 @@ if (args[0] === "auth" && args[1] === "status") {
     codexDesktopController,
   });
   const address = await app.listen({ host, port: 0 });
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  // The Codex state above lists `local`, but the board keeps its own row and
+  // the database no longer seeds one.
+  await fetch(`${baseUrl}/api/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "local", name: "Local", workspacePath: workspace }),
+  });
   return {
     app,
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     directory,
     nativeLaunches,
     workspace,
@@ -182,7 +190,6 @@ test("loopback AI API freezes server-owned origin and rejects injected execution
         projectId: "local",
         model: "gpt-real",
         reasoningEffort: "high",
-        sandbox: "read-only",
       },
     });
     assert.equal(created.response.status, 201);
@@ -244,7 +251,6 @@ test("a user move into in progress is launched natively exactly once without cod
     );
     assert.equal(moved.response.status, 200);
     assert.equal(moved.body.agentStart, undefined);
-    assert.equal((await request(fixture.baseUrl, "/api/local/ai/threads")).body.threads.length, 0);
 
     const launchBody = {
       expectedVersion: moved.body.task.version,
@@ -260,11 +266,14 @@ test("a user move into in progress is launched natively exactly once without cod
     assert.equal(launched.response.status, 200);
     assert.equal(launched.body.status, "started");
     assert.equal(launched.body.agentKind, "codex");
+    // A session woken in Codex's own client has no board-run transcript, which
+    // is what `chatThreadId: null` says and what hides the conversation button.
     assert.deepEqual(launched.body.task.agentSessions, [
       {
         agentKind: "codex",
         sessionId: launched.body.sessionId,
         updatedAt: launched.body.task.agentSessions[0].updatedAt,
+        chatThreadId: null,
       },
     ]);
     assert.equal(fixture.nativeLaunches.length, 1);
@@ -302,8 +311,6 @@ test("a user move into in progress is launched natively exactly once without cod
     );
     assert.equal(reordered.response.status, 200);
     assert.equal(reordered.body.agentStart, undefined);
-    const afterReorder = await request(fixture.baseUrl, "/api/local/ai/threads");
-    assert.equal(afterReorder.body.threads.length, 0);
 
     const claimed = await request(fixture.baseUrl, "/api/tasks", {
       method: "POST",
@@ -332,8 +339,11 @@ test("a user move into in progress is launched natively exactly once without cod
     );
     assert.equal(agentMove.response.status, 200);
     assert.equal(agentMove.body.agentStart, undefined);
-    const afterAgentClaim = await request(fixture.baseUrl, "/api/local/ai/threads");
-    assert.equal(afterAgentClaim.body.threads.length, 0);
+    const afterAgentClaim = await request(fixture.baseUrl, `/api/tasks/${created.body.task.id}`);
+    assert.equal(
+      afterAgentClaim.body.task.agentSessions.every((session) => session.chatThreadId === null),
+      true,
+    );
     assert.equal(fixture.nativeLaunches.length, 1);
   } finally {
     await fixture.close();
@@ -646,9 +656,16 @@ test("detail-style patches leave Codex for native launch while Claude keeps its 
     );
     assert.equal(edited.response.status, 200);
     assert.equal(edited.body.agentStart, undefined);
-    const threads = await request(fixture.baseUrl, "/api/local/ai/threads");
-    assert.equal(threads.body.threads.length, 1);
-    assert.equal(threads.body.threads[0].agentKind, "claude");
+    // The board ran this one itself, so its session points at a transcript once
+    // the turn reports the id back.
+    let claudeSession;
+    for (let attempt = 0; attempt < 100 && !claudeSession; attempt += 1) {
+      const reread = await request(fixture.baseUrl, `/api/tasks/${alreadyActive.body.task.id}`);
+      claudeSession = (reread.body.task.agentSessions ?? [])
+        .find((session) => session.agentKind === "claude");
+      if (!claudeSession) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(claudeSession?.chatThreadId);
   } finally {
     await fixture.close();
   }
@@ -696,31 +713,33 @@ test("the same in-progress transition starts the Claude assignee through its ada
   }
 });
 
-test("danger-full-access requires confirmation on every turn and thread settings are validated", async () => {
+test("the sandbox tier is the server's to pick and thread settings are validated", async () => {
   const fixture = await createServerFixture();
   try {
     const created = await request(fixture.baseUrl, "/api/local/ai/threads", {
       method: "POST",
-      body: {
-        projectId: "local",
-        model: "gpt-real",
-        reasoningEffort: "low",
-        sandbox: "danger-full-access",
-      },
+      body: { projectId: "local", model: "gpt-real", reasoningEffort: "low" },
     });
     assert.equal(created.response.status, 201);
+    assert.equal(created.body.thread.sandbox, "workspace-write");
     const threadId = created.body.thread.id;
-    const denied = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}/turns`, {
-      method: "POST",
-      body: { message: "hello" },
+
+    // The three tiers meant different things to each agent, so the choice is
+    // gone rather than defaulted: asking for one is an unknown field.
+    for (const body of [
+      { projectId: "local", sandbox: "danger-full-access" },
+      { projectId: "local", sandbox: "read-only" },
+    ]) {
+      const rejected = await request(fixture.baseUrl, "/api/local/ai/threads", { method: "POST", body });
+      assert.equal(rejected.response.status, 400);
+      assert.equal(rejected.body.error.code, "UNKNOWN_FIELD");
+    }
+    const patched = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}`, {
+      method: "PATCH",
+      body: { sandbox: "danger-full-access" },
     });
-    assert.equal(denied.response.status, 400);
-    assert.equal(denied.body.error.code, "DANGER_CONFIRMATION_REQUIRED");
-    const allowed = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}/turns`, {
-      method: "POST",
-      body: { message: "hello", dangerFullAccessConfirmed: true },
-    });
-    assert.equal(allowed.response.status, 202);
+    assert.equal(patched.response.status, 400);
+    assert.equal(patched.body.error.code, "UNKNOWN_FIELD");
 
     const invalidModel = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}`, {
       method: "PATCH",
@@ -742,17 +761,20 @@ test("thread management, interrupt and query contracts stay narrow", async () =>
     });
     const threadId = created.body.thread.id;
 
+    // Conversations are reached through their task, so there is no list route.
     const list = await request(fixture.baseUrl, "/api/local/ai/threads");
-    assert.equal(list.response.status, 200);
-    assert.equal(list.body.threads.some((thread) => thread.id === threadId), true);
+    assert.equal(list.response.status, 405);
 
-    const unknownQuery = await request(fixture.baseUrl, "/api/local/ai/threads?projectId=local");
+    const unknownQuery = await request(fixture.baseUrl, "/api/local/ai/threads?projectId=local", {
+      method: "POST",
+      body: { projectId: "local" },
+    });
     assert.equal(unknownQuery.response.status, 400);
     assert.equal(unknownQuery.body.error.code, "UNKNOWN_QUERY_PARAMETER");
 
     const updated = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}`, {
       method: "PATCH",
-      body: { title: "Renamed", sandbox: "workspace-write" },
+      body: { title: "Renamed" },
     });
     assert.equal(updated.response.status, 200);
     assert.equal(updated.body.thread.title, "Renamed");

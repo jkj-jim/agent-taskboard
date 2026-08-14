@@ -96,6 +96,8 @@ interface TaskDetailProps {
     relatedTaskId: string,
   ) => Promise<RelationMutationResult>;
   onOpenThread: (agentKind: AgentKind, threadId: string) => void;
+  /** Absent when the board cannot run agents itself, so no transcript is reachable. */
+  onOpenChat: ((chatThreadId: string) => void) | null;
   onOpenInThread: (task: Task) => void;
   onArchive: (task: Task) => Promise<boolean>;
   openingThread: boolean;
@@ -169,25 +171,43 @@ const DescriptionDocument = memo(function DescriptionDocument({ value }: { value
 function ConversationLink({
   agentKind,
   threadId,
+  chatThreadId,
   onOpen,
+  onOpenChat,
 }: {
   agentKind: AgentKind;
   threadId: string;
+  chatThreadId: string | null;
   onOpen: (agentKind: AgentKind, threadId: string) => void;
+  onOpenChat: ((chatThreadId: string) => void) | null;
 }) {
   const label = `在 ${agentLabel(agentKind)} 中打开`;
   return (
-    <button
-      className="issue-conversation-link"
-      type="button"
-      title={`${label} ${threadId}`}
-      onClick={() => onOpen(agentKind, threadId)}
-    >
-      <LinearIcon name="conversation" />
-      <strong>{label}</strong>
-      <span className="conversation-divider" aria-hidden="true" />
-      <span className="conversation-thread-id">{threadId}</span>
-    </button>
+    <div className="issue-conversation-row">
+      <button
+        className="issue-conversation-link"
+        type="button"
+        title={`${label} ${threadId}`}
+        onClick={() => onOpen(agentKind, threadId)}
+      >
+        <LinearIcon name="conversation" />
+        <strong>{label}</strong>
+        <span className="conversation-divider" aria-hidden="true" />
+        <span className="conversation-thread-id">{threadId}</span>
+      </button>
+      {/* Only a session the board ran itself left a transcript to read. */}
+      {chatThreadId && onOpenChat && (
+        <button
+          className="issue-conversation-transcript"
+          type="button"
+          title="查看对话记录"
+          aria-label="查看对话记录"
+          onClick={() => onOpenChat(chatThreadId)}
+        >
+          <LinearIcon name="expand" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -206,6 +226,7 @@ export function TaskDetail({
   onAddRelation,
   onRemoveRelation,
   onOpenThread,
+  onOpenChat,
   onOpenInThread,
   onArchive,
   openingThread,
@@ -669,7 +690,9 @@ export function TaskDetail({
                         key={`${session.agentKind}:${session.sessionId}`}
                         agentKind={session.agentKind}
                         threadId={session.sessionId}
+                        chatThreadId={session.chatThreadId ?? null}
                         onOpen={onOpenThread}
+                        onOpenChat={onOpenChat}
                       />
                     ))}
                   </div>
@@ -912,7 +935,9 @@ export function TaskDetail({
                           <ConversationLink
                             agentKind={agentByActorId(comment.authorId)?.kind ?? "codex"}
                             threadId={comment.threadId}
+                            chatThreadId={null}
                             onOpen={onOpenThread}
+                            onOpenChat={null}
                           />
                         </div>
                       )}

@@ -520,7 +520,7 @@ test("面板节点全部走 DOM API 构造，端口与项目来自注入配置",
   assert.match(source, /document\.createElementNS\(SVG_NAMESPACE, "svg"\)/);
   assert.match(source, /const CONFIG_KEY = "__workbuddyTaskboardConfig"/);
   assert.match(source, /const DEFAULT_ORIGIN = "http:\/\/127\.0\.0\.1:47823"/);
-  assert.match(source, /const DEFAULT_PROJECT = "local"/);
+  assert.doesNotMatch(source, /DEFAULT_PROJECT/);
   assert.match(source, /const DEFAULT_HOST = "workbuddy"/);
   assert.match(source, /globalThis\[CONFIG_KEY\]/);
   assert.doesNotMatch(source, /http:\/\/127\.0\.0\.1:47823\/\?/);
@@ -577,7 +577,7 @@ test("缺失或不合法的注入配置回退到默认地址", () => {
     harness.run();
     assert.equal(
       harness.frame().getAttribute("src"),
-      "http://127.0.0.1:47823/?project=local&host=workbuddy",
+      "http://127.0.0.1:47823/?host=workbuddy",
       `config=${JSON.stringify(config)} 必须回退到默认地址`,
     );
     assert.equal(harness.api().config.origin, "http://127.0.0.1:47823");
@@ -587,7 +587,7 @@ test("缺失或不合法的注入配置回退到默认地址", () => {
   partial.run();
   assert.equal(
     partial.frame().getAttribute("src"),
-    "http://127.0.0.1:8080/?project=local&host=workbuddy",
+    "http://127.0.0.1:8080/?host=workbuddy",
   );
 });
 

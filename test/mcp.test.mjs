@@ -25,6 +25,8 @@ async function createFixture(actor = MCP_ACTOR) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-mcp-test-"));
   const database = new TaskboardDatabase(path.join(directory, "taskboard.sqlite"));
   fixtures.push({ database, directory });
+  // Tasks need a project and the database no longer seeds one.
+  database.createProject({ id: "local", name: "Local", workspacePath: null });
   const service = createMcpService({ database, actor, serverVersion: "9.9.9" });
   return { database, service };
 }

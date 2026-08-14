@@ -175,6 +175,32 @@ function aiChatEventFromRow(row) {
   };
 }
 
+/**
+ * Ties a task's agent session to the conversation the board itself ran for it.
+ *
+ * Only sessions the board spawned have one: a Codex session woken in its own
+ * client, or a WorkBuddy one, leaves a row here but no thread. That absence is
+ * what tells the interface whether a transcript exists to open.
+ *
+ * `codex_thread_id` predates multi-agent support and holds the session id for
+ * every agent, which is why the join reads oddly.
+ */
+const AGENT_SESSION_THREAD_JOIN = `
+  LEFT JOIN ai_chat_threads AS threads
+    ON threads.origin_issue_id = sessions.task_id
+    AND threads.agent_kind = sessions.agent_kind
+    AND threads.codex_thread_id = sessions.session_id
+`;
+
+function agentSessionFromRow(row) {
+  return {
+    agentKind: row.agent_kind,
+    sessionId: row.session_id,
+    updatedAt: row.updated_at,
+    chatThreadId: row.chat_thread_id ?? null,
+  };
+}
+
 function projectPrefix(projectId) {
   const prefix = projectId.toUpperCase().replace(/[^A-Z0-9]+/g, "");
   return (prefix || "TASK").slice(0, 12);
@@ -546,12 +572,16 @@ export class TaskboardDatabase {
     }
     this.database.exec("CREATE INDEX IF NOT EXISTS attachments_comment_created ON attachments(comment_id, created_at, id)");
 
-    const timestamp = now();
-    this.database.prepare(`
-      INSERT INTO projects (id, name, workspace_path, next_task_number, created_at, updated_at)
-      VALUES ('local', 'Local', NULL, 1, ?, ?)
-      ON CONFLICT(id) DO NOTHING
-    `).run(timestamp, timestamp);
+    // `local` was seeded as the bucket for anything created without a project.
+    // Projects are folders now, and `local` never had one, so nothing can run in
+    // it; every default that pointed here is gone. An untouched row is dead
+    // weight in the project list, while one that collected issues is somebody's
+    // data and stays.
+    this.database.exec(`
+      DELETE FROM projects
+      WHERE id = 'local'
+        AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.project_id = 'local')
+    `);
   }
 
   close() {
@@ -740,13 +770,6 @@ export class TaskboardDatabase {
       throw error;
     }
     return this.getWorkflowWorkspace(projectId);
-  }
-
-  listAiChatThreads() {
-    return this.database.prepare(`
-      SELECT * FROM ai_chat_threads
-      ORDER BY updated_at DESC, id
-    `).all().map((row) => this.#aiChatThreadWithCurrentRun(row));
   }
 
   getAiChatThread(id) {
@@ -1020,16 +1043,18 @@ export class TaskboardDatabase {
     // needs the agent behind each session to label and route its links.
     const sessions = new Map();
     for (const row of this.database.prepare(`
-      SELECT task_id, agent_kind, session_id, updated_at
-      FROM task_agent_sessions
-      ORDER BY updated_at DESC
+      SELECT
+        sessions.task_id,
+        sessions.agent_kind,
+        sessions.session_id,
+        sessions.updated_at,
+        threads.id AS chat_thread_id
+      FROM task_agent_sessions AS sessions
+      ${AGENT_SESSION_THREAD_JOIN}
+      ORDER BY sessions.updated_at DESC
     `).all()) {
       const list = sessions.get(row.task_id) ?? [];
-      list.push({
-        agentKind: row.agent_kind,
-        sessionId: row.session_id,
-        updatedAt: row.updated_at,
-      });
+      list.push(agentSessionFromRow(row));
       sessions.set(row.task_id, list);
     }
     return tasks.map((task) => {
@@ -1666,15 +1691,16 @@ export class TaskboardDatabase {
 
   listAgentSessions(taskId) {
     return this.database.prepare(`
-      SELECT agent_kind, session_id, updated_at
-      FROM task_agent_sessions
-      WHERE task_id = ?
-      ORDER BY updated_at DESC
-    `).all(taskId).map((row) => ({
-      agentKind: row.agent_kind,
-      sessionId: row.session_id,
-      updatedAt: row.updated_at,
-    }));
+      SELECT
+        sessions.agent_kind,
+        sessions.session_id,
+        sessions.updated_at,
+        threads.id AS chat_thread_id
+      FROM task_agent_sessions AS sessions
+      ${AGENT_SESSION_THREAD_JOIN}
+      WHERE sessions.task_id = ?
+      ORDER BY sessions.updated_at DESC
+    `).all(taskId).map(agentSessionFromRow);
   }
 
   #touchTask(id, version, threadId) {

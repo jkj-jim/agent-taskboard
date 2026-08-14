@@ -63,7 +63,7 @@ test("AI chat persistence stores threads, runs, and visible events without hidde
     });
 
     assert.equal(fixture.database.getAiChatThread(thread.id).currentRun.id, run.id);
-    assert.equal(fixture.database.listAiChatThreads()[0].codexThreadId, "codex-thread-1");
+    assert.equal(fixture.database.getAiChatThread(thread.id).codexThreadId, "codex-thread-1");
     assert.deepEqual(fixture.database.listAiChatEvents(thread.id).map((event) => event.content), [
       "Visible answer",
     ]);

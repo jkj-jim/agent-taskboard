@@ -15,7 +15,7 @@ export { DEFAULT_AGENT_KIND };
  *   id, label, actor, assigneeTarget, executable
  *   preassignsSessionId, createSessionId?, sessionExists(id)
  *   resolveWorkspace(projectId) -> { workspacePath, addDirectories, project }
- *   catalog(projectId)          -> { models, skills, sandboxes }
+ *   catalog(projectId)          -> { models, skills }
  *   buildTurn(input)            -> { args, cwd, prompt, env? }
  *                                 `env` overlays the shared turn environment
  *   createDecoder()             -> (rawEvent) => normalizedEvent[]

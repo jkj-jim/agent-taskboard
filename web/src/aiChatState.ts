@@ -2,7 +2,6 @@ import type {
   AiChatEvent,
   AiChatAttachmentInput,
   AiChatModel,
-  AiChatSandbox,
   AiChatThread,
   AiChatThreadSnapshot,
   AiChatThreadStatus,
@@ -42,14 +41,6 @@ export function parseAiChatComposerFragment(
 
 export function isAiChatCapabilityAvailable(capabilities?: TaskboardCapabilities): boolean {
   return capabilities?.localAiChat === true;
-}
-
-export function buildThreadCreateInput(projectId: string, issueId: string | null) {
-  if (!projectId) return null;
-  return {
-    projectId,
-    ...(issueId ? { issueId } : {}),
-  };
 }
 
 export function routeChatState(
@@ -102,14 +93,12 @@ export function reasoningEffortForModel(
 export function buildTurnInput(
   message: string,
   skillIds: string[],
-  dangerFullAccessConfirmed: boolean,
   attachments: AiChatAttachmentInput[] = [],
 ) {
   return {
     message,
     ...(skillIds.length > 0 ? { skillIds } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
-    ...(dangerFullAccessConfirmed ? { dangerFullAccessConfirmed: true } : {}),
   };
 }
 
@@ -122,13 +111,6 @@ export function chatPrimaryAction(
   if (blocked) return "disabled";
   if (status === "running") return "stop";
   return message.trim() || hasAttachments ? "send" : "disabled";
-}
-
-export function needsDangerConfirmation(
-  sandbox: AiChatSandbox,
-  confirmed: boolean,
-): boolean {
-  return sandbox === "danger-full-access" && !confirmed;
 }
 
 export function shouldRefreshAiSnapshot(type: string): boolean {

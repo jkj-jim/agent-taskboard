@@ -304,13 +304,13 @@ function slugify(value) {
     .slice(0, 64);
 }
 
-function validateProjectId(value) {
-  const id = stringField(value, "id", { required: true, maxLength: 64 });
+function validateProjectId(value, field = "id") {
+  const id = stringField(value, field, { required: true, maxLength: 64 });
   if (!PROJECT_ID_PATTERN.test(id)) {
     throw new ApiError(
       400,
       "INVALID_FIELD",
-      "'id' must be a lowercase slug containing letters, numbers, or hyphens",
+      `'${field}' must be a lowercase slug containing letters, numbers, or hyphens`,
     );
   }
   return id;
@@ -757,7 +757,7 @@ function parseTaskCreate(body) {
     "recurrence",
   ]));
   const input = {
-    projectId: validateProjectId(body.projectId ?? "local"),
+    projectId: validateProjectId(body.projectId, "projectId"),
     title: stringField(body.title, "title", { required: true, maxLength: 240 }),
     description: stringField(body.description ?? "", "description", { maxLength: 100_000 }),
     status: parseStatus(body.status, "backlog"),

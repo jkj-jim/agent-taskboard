@@ -251,6 +251,5 @@ export async function discoverAiCatalog({
   return {
     models: sanitizeModels(modelCatalog?.models),
     skills: sanitizeSkills(skillEntries),
-    sandboxes: ["read-only", "workspace-write", "danger-full-access"],
   };
 }

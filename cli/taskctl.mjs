@@ -15,7 +15,6 @@ import {
   isAgentKind,
 } from "../shared/agents.mjs";
 import {
-  DEFAULT_PROJECT_ID,
   TASK_STATUSES,
   isTaskPriority,
   isTaskStatus,
@@ -712,17 +711,39 @@ async function mutateIssueRelation(api, action, taskId, options, overrides) {
   );
 }
 
+/**
+ * Which project this directory belongs to, or none.
+ *
+ * A project's checkout on this device comes from three sources merged, and the
+ * `workspacePath` column is only one of them — a project mapped through Codex's
+ * state or through `project map` reads as pathless here. Asking the device for
+ * the merged map is what makes a Codex-owned project resolve.
+ *
+ * Nothing matching returns nothing. Naming an unrelated project is worse than
+ * saying "no project here": an agent that trusts the guess files its work in
+ * the wrong place, and the mistake looks like an answer.
+ */
 async function currentContext(api, options, overrides) {
   const cwd = path.resolve(options.cwd ?? overrides.cwd ?? process.cwd());
   const response = await api.request("GET", "/api/projects");
   const projects = Array.isArray(response.projects) ? response.projects : [];
-  const matchingProjects = projects
-    .filter((candidate) => workspaceContains(candidate?.workspacePath, cwd))
-    .sort((left, right) => right.workspacePath.length - left.workspacePath.length);
-  const project = matchingProjects[0]
-    ?? projects.find((candidate) => candidate?.id === DEFAULT_PROJECT_ID)
-    ?? projects[0]
-    ?? null;
+  let deviceWorkspaces = {};
+  try {
+    const devices = await api.request("GET", "/api/device-workspaces");
+    if (devices?.workspaces && typeof devices.workspaces === "object") {
+      deviceWorkspaces = devices.workspaces;
+    }
+  } catch {
+    // Cloud mode has no device map; the column is all there is.
+  }
+  const project = projects
+    .map((candidate) => ({
+      project: candidate,
+      workspacePath: deviceWorkspaces[candidate?.id] ?? candidate?.workspacePath,
+    }))
+    .filter((candidate) => workspaceContains(candidate.workspacePath, cwd))
+    .sort((left, right) => right.workspacePath.length - left.workspacePath.length)[0]
+    ?.project ?? null;
   return { cwd, project };
 }
 

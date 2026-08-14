@@ -11,7 +11,6 @@
   const OWNED_ATTRIBUTE = "data-workbuddy-taskboard-owned";
   const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
   const DEFAULT_ORIGIN = "http://127.0.0.1:47823";
-  const DEFAULT_PROJECT = "local";
   const DEFAULT_HOST = "workbuddy";
   const SIDEBAR_SELECTORS = [".conversation-sidebar", '[data-view-id="sidebar"]'];
   const TAB_SELECTOR = '[role="tab"]';
@@ -67,11 +66,13 @@
   function resolveConfig() {
     const injected = globalThis[CONFIG_KEY];
     const source = injected && typeof injected === "object" ? injected : {};
-    const project = trimmedString(source.project) || DEFAULT_PROJECT;
+    // No project is named unless the host asks for one: the board then opens on
+    // its project home, which is also where a project gets created.
+    const project = trimmedString(source.project);
     const host = trimmedString(source.host) || DEFAULT_HOST;
     const url = parseHttpUrl(trimmedString(source.origin)) || parseHttpUrl(DEFAULT_ORIGIN);
     url.hash = "";
-    url.searchParams.set("project", project);
+    if (project) url.searchParams.set("project", project);
     url.searchParams.set("host", host);
     return Object.freeze({ origin: url.origin, project, host, url: url.href });
   }

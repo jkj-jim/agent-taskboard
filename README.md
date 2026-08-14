@@ -22,6 +22,14 @@ npm start
 
 打开 <http://127.0.0.1:47823>。SQLite 数据库存储在 `.data/taskboard.sqlite`。
 
+## 项目
+
+**一个项目就是一个本地文件夹。** 侧边栏「项目」旁的 `+` 和项目首页右上角的「新建项目」都会弹出系统的文件夹选择框，选中即建好项目：项目名取文件夹名，路径即工作区。选到一个已经属于某个项目的文件夹时，直接打开那个项目，不会建出第二个。
+
+选择框由本地服务弹出，所以浏览器、Codex 和 WorkBuddy 三种打开方式的行为完全一致——网页自身拿不到文件夹的绝对路径，宿主的选择器又只在注入时可用。
+
+Codex 侧边栏里已有的项目会一并列在项目首页，点开即接管，两边共用同一个项目 id。反过来，当任务在一个 Codex 还不认识的文件夹里启动会话时，看板会让 Codex 为该文件夹补建项目；文件夹相同即同一个项目，Claude 与 WorkBuddy 同理，前者以该目录为工作目录，后者以它为工作空间。
+
 如需在前端开发时启用实时重载：
 
 ```bash
@@ -77,7 +85,7 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
    看板会在 `GET /api/local/agents` 里如实上报每个 Agent 的可用性与登录状态，未登录时界面会提示，而不是等到发消息才失败。
 
-2. **确认项目能解析到本机目录。** 工作区解析与 Agent 无关，按顺序取三个来源：Codex 应用维护的本机项目路径表、项目自身的 `workspacePath`、以及 `taskctl project map` 写下的设备映射。多数项目会自动命中；若报 `PROJECT_WORKSPACE_UNAVAILABLE`，显式映射一次即可：
+2. **确认项目能解析到本机目录。** 工作区解析与 Agent 无关，按顺序取三个来源：Codex 应用维护的本机项目路径表、项目自身的 `workspacePath`（从文件夹新建的项目自带）、以及 `taskctl project map` 写下的设备映射。多数项目会自动命中；若报 `PROJECT_WORKSPACE_UNAVAILABLE`，显式映射一次即可：
 
    ```bash
    npm run taskctl -- project map <project-id> --workspace-path /absolute/path/to/repo
@@ -95,7 +103,9 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 **在对话中打开。** 这是用户主动编辑入口：Codex Agent 会通过本机桥打开新的原生输入框，插入真实的 `$manage-taskboard` Skill mention 和任务指令，但不会自动发送。你可以修改或补充提示词，再自己点击发送。首次发送前 Codex 尚未生成正式会话 ID，因此看板不会提前绑定会话；Agent 后续通过 `taskctl` 写评论或任务时会自动记录当前会话。Claude Agent 继续走 `claude://code/new`，并把工作目录和预填指令一起带过去。远程 Cloud 页面不能直接控制桌面客户端，需要回到运行 Codex 的电脑操作。
 
-**在看板内直接跑。** AI 面板新建会话时选 Claude，服务会以 `claude -p --output-format stream-json` 驱动，工具调用、文件改动、token 用量都会实时显示在面板里。会话 id 在第一轮执行前就已生成（`--session-id`），因此任务一开始就能关联和跳转。这类会话和你自己开的会话一样落在项目工作区下，在该目录里敲 `claude` 后 `/resume` 就能接着聊。
+**在看板内直接跑。** 把 Claude Agent 负责的任务移入「进行中」时，服务会以 `claude -p --output-format stream-json` 起一轮。会话 id 在第一轮执行前就已生成（`--session-id`），因此任务一开始就能关联和跳转。这类会话和你自己开的会话一样落在项目工作区下，在该目录里敲 `claude` 后 `/resume` 就能接着聊。
+
+看板跑出来的会话会在任务详情的会话入口旁多一个按钮，点开是这一轮的对话记录：工具调用、文件改动、报错都在里面，运行中可以中断，也可以直接追问让它接着改。在别的客户端里唤起的会话（Codex 原生、WorkBuddy）没有这个按钮，因为看板手里没有它们的过程。
 
 **关联并唤起已有会话。** 任务详情下方列出该任务每个 Agent 的当前会话，点击即可在对应客户端中打开（Claude 走 `claude://resume?session=<id>`，会把该 CLI 会话导入桌面端）。旁边的「关联已有会话…」下拉列出该项目目录下的所有 Claude Code 会话（活跃的带 ●），可以把你自己开的会话挂到任务上。
 
@@ -103,7 +113,7 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 ### 注意事项
 
-- **Claude Code 没有 OS 级沙箱。** Codex 的 `workspace-write` 由操作系统限制写入范围，Claude Code 没有等价机制；无头模式下若只放行编辑（`acceptEdits`），所有命令都会被拒绝而让 Agent 空转。因此看板把 `workspace-write` 和 `danger-full-access` 都映射为 `bypassPermissions`，**该档位等同全放行、命令不会逐条审批**，界面上有对应提示。需要逐条审批时应使用 `read-only`（对应 plan 模式），或等待后续接入审批直通。
+- **Claude Code 没有 OS 级沙箱，而且看板跑的就是全放行的一档。** Codex 的 `workspace-write` 由操作系统限制写入范围，Claude Code 没有等价机制；无头模式下若只放行编辑（`acceptEdits`），所有命令都会被拒绝而让 Agent 空转。所以看板一律用 `workspace-write` 这一档跑：Codex 侧它是真沙箱加自动审阅，Claude 侧它等同 `bypassPermissions`，**命令不逐条审批**。这一档不可选——三档命名照搬自 Codex 的审批模型，两家实现并不对应，交给用户选只会误导。
 - **模型目录是写死的。** Claude 没有 `codex debug models` 的等价接口，可选模型维护在 `server/agents/claude.mjs` 的 `CLAUDE_MODELS` 里，新模型发布后需要手动补一行。
 - **深链需要 Claude 桌面端。** `claude://resume` / `claude://code/new` 由桌面端注册处理；首次在一个新目录里打开会话时，Claude Code 会弹出「是否信任该文件夹」，确认一次即可。
 - **桌面端打开 CLI 会话是「导入副本」，不是接管。** 终端里的 `claude` 和桌面端各自维护会话列表：桌面端起的会话直接写进 `~/.claude/projects/`，CLI 能看到；反过来 CLI 会话要点一次「在 Claude Code 中打开」，桌面端才会把它导入自己的列表（同一会话只导入一次，重复点击会回到同一个窗口）。**若该会话此刻正开在某个终端里**（选项里标了「运行中」），导入后两边会各写各的，看起来就像多了一个内容相同的会话；这类会话建议在原终端里继续，或等它结束再从看板打开。
@@ -136,7 +146,7 @@ Agent 通过 `taskboard_get_task` / `taskboard_add_comment` / `taskboard_move_ta
 
 ### 注意事项
 
-- **WorkBuddy 不能在看板的 AI 对话里使用。** 它没有无头模式，看板无法自己跑一轮；在对话里选中它会得到明确提示。
+- **WorkBuddy 的会话没有对话记录可看。** 它没有无头模式，会话跑在它自己的客户端里，所以任务详情上只有「在 WorkBuddy 中打开」，没有查看记录的入口。
 - **任务描述里不要写看板地址。** WorkBuddy 的网关会拒绝内容中含 `http://127.0.0.1:<端口>` 的请求（错误码 11133）。地址只存在于 MCP 配置里，指令里不出现。
 - **工作目录是它自己的沙箱。** 每个会话跑在 `~/WorkBuddy/<时间戳>` 下，看板无法指定项目 checkout。需要它在仓库里干活时，要在 WorkBuddy 侧用「选择工作空间」指定。
 - **停止 WorkBuddy 要走它自己的退出流程。** 直接发信号会让它卡在退出确认里，界面停在启动画面且无法关闭。

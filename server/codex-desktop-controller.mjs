@@ -202,6 +202,29 @@ function projectRowExpression(projectId, body) {
 }
 
 /**
+ * Makes the task's folder a project in Codex, and the current one.
+ *
+ * A folder identifies a project on both sides, but the ids do not have to
+ * match: a project created on the board carries its own id, and Codex mints a
+ * fresh uuid for every project of its own. So the folder, not the id, is what
+ * is handed over. Codex reuses the project that already covers this root and
+ * only creates one when none does, which is what lets a task launch into a
+ * checkout Codex has never been pointed at.
+ *
+ * Passing `root` is also what keeps the dialog shut — the same message without
+ * it is how Codex's own sidebar asks a person to pick a folder.
+ */
+async function ensureWorkspaceRoot(cdp, workspacePath) {
+  await evaluate(cdp, `(async () => {
+    await window.electronBridge.sendMessageFromView({
+      type: 'electron-add-new-workspace-root-option',
+      root: ${JSON.stringify(workspacePath)},
+    });
+    return true;
+  })()`, { awaitPromise: true });
+}
+
+/**
  * Files the new thread under the task's project.
  *
  * The workspace root only decides which folder the session may touch; which
@@ -490,13 +513,7 @@ export function createCodexDesktopController(options = {}) {
         threadIds: expandedSnapshot.threadIds,
       };
 
-      await evaluate(cdp, `(async () => {
-        await window.electronBridge.sendMessageFromView({
-          type: 'electron-set-active-workspace-root',
-          root: ${JSON.stringify(workspacePath)},
-        });
-        return true;
-      })()`, { awaitPromise: true });
+      await ensureWorkspaceRoot(cdp, workspacePath);
       await selectProject(cdp, projectId);
       await navigate(cdp, "/");
 

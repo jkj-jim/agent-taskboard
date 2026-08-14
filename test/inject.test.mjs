@@ -240,7 +240,7 @@ test("native Codex launches leave manual prompts editable and only auto-submit b
   assert.match(source, /function endNativeTaskLaunch\(success = true\)/);
   assert.match(source, /function prefillNativeTask\(payload\)/);
   assert.match(source, /requestHost\("prefill-task-composer"/);
-  assert.match(desktopController, /type: 'electron-set-active-workspace-root'/);
+  assert.match(desktopController, /type: 'electron-add-new-workspace-root-option'/);
   assert.match(desktopController, /label === 'plan' \|\| label === '计划'/);
   assert.match(skillInterface, /display_name: "manage-taskboard"/);
   assert.match(desktopController, /skillName: "manage-taskboard"/);

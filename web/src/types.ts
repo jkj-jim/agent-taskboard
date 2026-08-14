@@ -21,6 +21,8 @@ export interface AgentSession {
   agentKind: AgentKind;
   sessionId: string;
   updatedAt: string;
+  /** Set only for sessions the board ran itself, which is what has a transcript. */
+  chatThreadId?: string | null;
 }
 
 export type AgentStartResult =
@@ -119,7 +121,6 @@ export interface AiChatAttachmentInput {
 export interface AiChatCatalog {
   models: AiChatModel[];
   skills: AiChatSkill[];
-  sandboxes: string[];
 }
 
 export interface AiChatOrigin {
@@ -145,6 +146,7 @@ export interface AiChatThread {
   title: string;
   status: AiChatThreadStatus;
   origin: AiChatOrigin;
+  agentKind: AgentKind;
   codexThreadId: string | null;
   model: string;
   reasoningEffort: string;

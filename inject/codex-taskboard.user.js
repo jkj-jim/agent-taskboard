@@ -685,8 +685,12 @@
       }
 
       if (workspacePath) {
+        // Codex is handed the folder rather than a project id: it reuses the
+        // project that already covers this root and creates one when none does,
+        // so a task can open in a checkout Codex has never seen. The same
+        // message without `root` is what opens Codex's own folder picker.
         await bridge.sendMessageFromView({
-          type: "electron-set-active-workspace-root",
+          type: "electron-add-new-workspace-root-option",
           root: workspacePath,
         });
       }

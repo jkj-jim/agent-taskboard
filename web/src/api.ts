@@ -56,6 +56,11 @@ export class ApiError extends Error {
   }
 }
 
+/** An aborted fetch rejects with a `DOMException`, which need not be an `Error`. */
+function isAbortError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "AbortError";
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -72,7 +77,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(path, { ...init, headers });
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw error;
+    if (isAbortError(error)) throw error;
     throw new ApiError(0, {
       error: {
         code: "SERVICE_UNAVAILABLE",
@@ -80,10 +85,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   }
-  const body = (await response.json().catch(() => ({}))) as T & ApiErrorBody;
+  // Reading the body can fail long after the status line arrived: the request
+  // may be aborted mid-stream, or the connection may drop while the server
+  // restarts. Both used to collapse into an empty object, so a successful call
+  // handed the caller `undefined` where it expected a list and the page blew up
+  // one render later. Only a genuinely empty body is allowed through as `{}`.
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new ApiError(response.status, {
+      error: { code: "RESPONSE_INTERRUPTED", message: "响应中断，请重试。" },
+    });
+  }
 
-  if (!response.ok) throw new ApiError(response.status, body);
-  return body;
+  let body: (T & ApiErrorBody) | null = null;
+  if (text) {
+    try {
+      body = JSON.parse(text) as T & ApiErrorBody;
+    } catch {
+      // An error response is allowed to carry a non-JSON body; a successful one
+      // that fails to parse is a truncated or proxied response, not data.
+      if (response.ok) {
+        throw new ApiError(response.status, {
+          error: { code: "INVALID_RESPONSE", message: "服务返回了无法解析的响应，请重试。" },
+        });
+      }
+    }
+  }
+
+  if (!response.ok) throw new ApiError(response.status, body ?? {});
+  return (body ?? {}) as T;
 }
 
 export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
@@ -113,26 +146,6 @@ export async function getAiChatCatalog(
   );
 }
 
-export async function listAiChatThreads(signal?: AbortSignal): Promise<AiChatThread[]> {
-  const data = await request<{ threads: AiChatThread[] }>("/api/local/ai/threads", { signal });
-  return data.threads;
-}
-
-export async function createAiChatThread(input: {
-  projectId: string;
-  issueId?: string;
-  title?: string;
-  model?: string;
-  reasoningEffort?: string;
-  sandbox?: AiChatSandbox;
-}): Promise<AiChatThread> {
-  const data = await request<{ thread: AiChatThread }>("/api/local/ai/threads", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return data.thread;
-}
-
 export async function getAiChatThread(
   threadId: string,
   signal?: AbortSignal,
@@ -149,7 +162,6 @@ export async function updateAiChatThread(
     title?: string;
     model?: string;
     reasoningEffort?: string;
-    sandbox?: AiChatSandbox;
   },
 ): Promise<AiChatThread> {
   const data = await request<{ thread: AiChatThread }>(
@@ -160,13 +172,6 @@ export async function updateAiChatThread(
     },
   );
   return data.thread;
-}
-
-export async function deleteAiChatThread(threadId: string): Promise<void> {
-  await request<void>(
-    `/api/local/ai/threads/${encodeURIComponent(threadId)}`,
-    { method: "DELETE" },
-  );
 }
 
 export async function startAiChatTurn(
@@ -264,6 +269,24 @@ export async function createProject(input: {
     body: JSON.stringify(input),
   });
   return data.project;
+}
+
+/**
+ * Creates a project from a folder the person picks in the system dialog.
+ *
+ * The dialog belongs to the server because no shell the board runs in can name
+ * a directory on its own: a browser tab never sees the absolute path behind a
+ * file input, and the Codex and WorkBuddy pickers are reachable only through
+ * injection that is on its way out. Picking a folder some project already uses
+ * reopens that project, which is what `created` reports.
+ */
+export async function createProjectForDirectory(
+  workspacePath?: string,
+): Promise<{ project: Project; created: boolean }> {
+  return request<{ project: Project; created: boolean }>("/api/local/projects", {
+    method: "POST",
+    body: JSON.stringify(workspacePath === undefined ? {} : { workspacePath }),
+  });
 }
 
 export async function listDevelopmentContexts(

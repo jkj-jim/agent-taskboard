@@ -284,6 +284,42 @@ kbd {
   font-weight: 500;
 }
 
+.nav-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-bottom: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.nav-add svg {
+  width: 13px;
+  height: 13px;
+}
+
+.nav-add:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.nav-add:disabled {
+  cursor: progress;
+  opacity: 0.5;
+}
+
 .nav-item,
 .project-nav-item,
 .theme-toggle {
@@ -470,7 +506,43 @@ kbd {
   margin-inline: auto;
 }
 
-.project-home-heading > span {
+.project-home-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.project-home-create {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.project-home-create svg {
+  width: 13px;
+  height: 13px;
+}
+
+.project-home-create:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.project-home-create:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.project-home-titles > span {
   color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 550;
@@ -670,9 +742,14 @@ kbd {
 .project-home-empty {
   display: grid;
   place-items: center;
+  gap: 6px;
   min-height: 260px;
   color: var(--text-tertiary);
   text-align: center;
+}
+
+.project-home-empty .project-home-create {
+  margin-top: 8px;
 }
 
 .project-home-empty h2,
@@ -2846,6 +2923,39 @@ kbd {
   justify-items: start;
   gap: 8px;
   margin-top: 18px;
+}
+
+.issue-conversation-row {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 6px;
+}
+
+.issue-conversation-transcript {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.issue-conversation-transcript svg {
+  width: 14px;
+  height: 14px;
+}
+
+.issue-conversation-transcript:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .issue-conversation-link {

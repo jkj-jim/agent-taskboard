@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
-  DEFAULT_PROJECT_ID,
   TASK_STATUSES,
   isTaskPriority,
   isTaskStatus,
@@ -43,6 +42,8 @@ import {
   isLocalCompanionRoute,
 } from "./cloud-proxy.mjs";
 import { ApiError, TaskboardDatabase } from "./database.mjs";
+import { existingDirectory } from "./ai-chat-catalog.mjs";
+import { chooseDirectory } from "./directory-dialog.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -471,12 +472,35 @@ function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 
-function validateProjectId(value, { required = true } = {}) {
-  const id = stringField(value, "id", { required, maxLength: 64 });
+function validateProjectId(value, { required = true, field = "id" } = {}) {
+  const id = stringField(value, field, { required, maxLength: 64 });
   if (id !== undefined && !PROJECT_ID_PATTERN.test(id)) {
-    throw new ApiError(400, "INVALID_FIELD", "'id' must be a lowercase slug containing letters, numbers, or hyphens");
+    throw new ApiError(
+      400,
+      "INVALID_FIELD",
+      `'${field}' must be a lowercase slug containing letters, numbers, or hyphens`,
+    );
   }
   return id;
+}
+
+/**
+ * A readable id for a freshly picked folder, falling back to its path.
+ *
+ * The id shapes the identifier of every issue in the project, so a folder named
+ * `agent-taskboard` should read as `AGENTTASKBOA-1` rather than as a digest.
+ * Names that survive slugification empty — `知识流转系统`, say — or that collide
+ * with an existing project fall back to the path digest, which keeps the same
+ * folder mapping to the same id no matter when it is picked.
+ */
+function projectIdForDirectory(workspacePath, taken) {
+  const digest = createHash("sha256").update(workspacePath).digest("hex");
+  const base = slugify(path.basename(workspacePath)).slice(0, 50);
+  const candidates = base ? [base, `${base}-${digest.slice(0, 6)}`] : [];
+  for (const candidate of candidates) {
+    if (PROJECT_ID_PATTERN.test(candidate) && !taken.has(candidate)) return candidate;
+  }
+  return `project-${digest.slice(0, 12)}`;
 }
 
 function parseProjectCreate(body) {
@@ -674,7 +698,7 @@ function parseTaskCreate(body) {
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId",
     "assigneeTarget", "workflowId", "developmentContext", "dueDate", "recurrence",
   ]));
-  const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
+  const projectId = validateProjectId(body.projectId, { field: "projectId" });
   const task = {
     projectId,
     title: stringField(body.title, "title", { required: true, maxLength: 240 }),
@@ -875,18 +899,6 @@ function parseTaskFilters(searchParams) {
   return { projectId, status: statusValue ?? undefined, archived };
 }
 
-function parseAiSandbox(value) {
-  if (value === undefined) return undefined;
-  if (!["read-only", "workspace-write", "danger-full-access"].includes(value)) {
-    throw new ApiError(
-      400,
-      "INVALID_SANDBOX",
-      "'sandbox' must be read-only, workspace-write, or danger-full-access",
-    );
-  }
-  return value;
-}
-
 function parseAiSetting(value, name, maxLength) {
   const setting = stringField(value, name, { maxLength });
   if (setting === "") {
@@ -904,7 +916,6 @@ function parseAiThreadCreate(body) {
     "agentKind",
     "model",
     "reasoningEffort",
-    "sandbox",
   ]));
   return {
     projectId: validateProjectId(body.projectId),
@@ -913,20 +924,18 @@ function parseAiThreadCreate(body) {
     agentKind: parseAiSetting(body.agentKind, "agentKind", 32),
     model: parseAiSetting(body.model, "model", 128),
     reasoningEffort: parseAiSetting(body.reasoningEffort, "reasoningEffort", 64),
-    sandbox: parseAiSandbox(body.sandbox),
   };
 }
 
 function parseAiThreadPatch(body) {
   assertPlainObject(body);
-  assertAllowedKeys(body, new Set(["title", "model", "reasoningEffort", "sandbox"]));
+  assertAllowedKeys(body, new Set(["title", "model", "reasoningEffort"]));
   const input = {};
   if (body.title !== undefined) input.title = parseAiSetting(body.title, "title", 160);
   if (body.model !== undefined) input.model = parseAiSetting(body.model, "model", 128);
   if (body.reasoningEffort !== undefined) {
     input.reasoningEffort = parseAiSetting(body.reasoningEffort, "reasoningEffort", 64);
   }
-  if (body.sandbox !== undefined) input.sandbox = parseAiSandbox(body.sandbox);
   if (Object.keys(input).length === 0) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one thread setting");
   }
@@ -1131,20 +1140,6 @@ function codexProjectRoot(state, projectId) {
   const project = state["local-projects"]?.[projectId];
   const root = Array.isArray(project?.rootPaths) ? project.rootPaths[0] : null;
   return typeof root === "string" && root.trim() ? root : null;
-}
-
-async function readCodexProjectWorkspaces(codexStatePath) {
-  try {
-    const state = JSON.parse(await readFile(codexStatePath, "utf8"));
-    const projects = state["local-projects"];
-    if (!projects || typeof projects !== "object" || Array.isArray(projects)) return {};
-    return Object.fromEntries(Object.keys(projects).flatMap((projectId) => {
-      const root = codexProjectRoot(state, projectId);
-      return root ? [[projectId, root]] : [];
-    }));
-  } catch {
-    return {};
-  }
 }
 
 function latestThreadCwd(value, threadId) {
@@ -1786,6 +1781,59 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, { projectId, workspacePath });
       }
 
+      // Creating a project means naming a folder, so this route owns the folder
+      // dialog too. `workspacePath` skips it, which is how a shell with a picker
+      // of its own — or a test — supplies the answer directly.
+      if (pathname === "/api/local/projects") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "POST /api/local/projects");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["workspacePath"]));
+
+        let workspacePath;
+        if (body.workspacePath === undefined) {
+          ({ workspacePath } = await chooseDirectory());
+        } else {
+          const requested = pathField(body.workspacePath, "workspacePath");
+          if (!requested || !path.isAbsolute(requested)) {
+            throw new ApiError(400, "INVALID_FIELD", "'workspacePath' must be absolute");
+          }
+          workspacePath = await existingDirectory(requested);
+          if (!workspacePath) {
+            throw new ApiError(404, "WORKSPACE_NOT_FOUND", `'${requested}' is not a directory on this device`);
+          }
+        }
+
+        // A folder identifies a project, so picking one that some agent already
+        // works in reopens that project instead of splitting it in two. Codex
+        // knows folders the board has never stored, and those become the board's
+        // project under Codex's own id, which is what keeps the two sides paired.
+        const workspaces = await deviceWorkspaces();
+        for (const [projectId, candidate] of workspaces) {
+          if (candidate !== workspacePath) continue;
+          const stored = database.getProject(projectId);
+          if (stored) return sendJson(response, 200, { project: stored, created: false });
+          const adopted = database.createProject({
+            id: projectId,
+            name: path.basename(workspacePath),
+            workspacePath,
+          });
+          events.emit("project.created", { project: adopted });
+          return sendJson(response, 201, { project: adopted, created: true });
+        }
+
+        const taken = new Set(database.listProjects().map((project) => project.id));
+        const project = database.createProject({
+          id: projectIdForDirectory(workspacePath, taken),
+          name: path.basename(workspacePath),
+          workspacePath,
+        });
+        events.emit("project.created", { project });
+        return sendJson(response, 201, { project, created: true });
+      }
+
       if (pathname === "/api/meta") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         if ([...url.searchParams.keys()].length > 0) {
@@ -1845,16 +1893,13 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, await aiChat.getCatalog(projectId, agentKind));
       }
 
+      // Conversations are reached through the task that owns them, so there is
+      // no list to serve — only the thread a task's session points at.
       if (pathname === "/api/local/ai/threads") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
         assertNoQuery(url.searchParams, "/api/local/ai/threads");
-        if (request.method === "GET") {
-          return sendJson(response, 200, { threads: await aiChat.listThreads() });
-        }
-        if (request.method === "POST") {
-          const thread = await aiChat.createThread(parseAiThreadCreate(await readJson(request)));
-          return sendJson(response, 201, { thread });
-        }
-        return methodNotAllowed(response, ["GET", "POST"]);
+        const thread = await aiChat.createThread(parseAiThreadCreate(await readJson(request)));
+        return sendJson(response, 201, { thread });
       }
 
       const aiThreadEventsRoute = pathname.match(/^\/api\/local\/ai\/threads\/([^/]+)\/events$/);
@@ -1936,8 +1981,11 @@ export function createTaskboardServer(options = {}) {
         if ([...url.searchParams.keys()].length > 0) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/device-workspaces does not accept query parameters");
         }
+        // Every source counts, not just Codex's: a project created from a
+        // folder carries its own path, and the board would otherwise offer to
+        // locate a checkout it already knows.
         return sendJson(response, 200, {
-          workspaces: await readCodexProjectWorkspaces(resolved.codexStatePath),
+          workspaces: Object.fromEntries(await deviceWorkspaces()),
         });
       }
 

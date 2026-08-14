@@ -24,6 +24,7 @@ import {
   addTaskRelation,
   archiveTask as archiveTaskRequest,
   createProject as createProjectRequest,
+  createProjectForDirectory,
   createTask as createTaskRequest,
   getTaskboardRevision,
   getWorkflowWorkspace,
@@ -608,6 +609,8 @@ export function App() {
   const [movingTaskId, setMovingTaskId] = useState<string | null>(null);
   const [settlingTaskId, setSettlingTaskId] = useState<string | null>(null);
   const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [openChatThreadId, setOpenChatThreadId] = useState<string | null>(null);
   const [openingThreadTaskId, setOpeningThreadTaskId] = useState<string | null>(null);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [favoriteProjectIds, setFavoriteProjectIds] = useState(readFavoriteProjectIds);
@@ -1225,7 +1228,7 @@ export function App() {
       return;
     }
     const controller = new AbortController();
-    const codexProjectId = selectedProjectId === "local" ? hostContext?.projectId : selectedProjectId;
+    const codexProjectId = selectedProjectId;
     const codexThreadId = hostContext?.threadId ?? detailTask?.threadId ?? undefined;
     setDevelopmentScan({ workspacePath: selectedDeviceWorkspacePath ?? null, contexts: [] });
     setDevelopmentScanLoading(true);
@@ -1972,6 +1975,32 @@ export function App() {
     setAnnouncement(`${selectedProject?.name ?? "项目"}${shouldFavorite ? "已收藏。" : "已取消收藏。"}`);
   }
 
+  /**
+   * A project is a folder, so creating one is picking a folder and nothing else
+   * — the name, the id and the workspace all follow from it. The dialog belongs
+   * to the server, which is why this works the same in a browser tab, in Codex
+   * and in WorkBuddy.
+   */
+  async function createProjectFromFolder() {
+    if (creatingProject) return;
+    setCreatingProject(true);
+    setActionError(null);
+    try {
+      const { project, created } = await createProjectForDirectory();
+      setProjects((current) => (
+        current.some((candidate) => candidate.id === project.id) ? current : [...current, project]
+      ));
+      setAnnouncement(created ? `已创建项目 ${project.name}。` : `${project.name} 已经是一个项目。`);
+      changeProject(project.id);
+    } catch (error) {
+      // Closing the dialog is an answer, not a failure.
+      if (error instanceof ApiError && error.code === "DIRECTORY_SELECTION_CANCELED") return;
+      setActionError(errorMessage(error));
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
   async function selectProject(choice: ProjectChoice) {
     if (openingProjectId) return;
     setOpeningProjectId(choice.id);
@@ -2041,7 +2070,19 @@ export function App() {
           </nav>
 
           <div className="project-nav">
-            <span className="nav-label">项目</span>
+            <div className="nav-label-row">
+              <span className="nav-label">项目</span>
+              <button
+                className="nav-add"
+                type="button"
+                title="新建项目"
+                aria-label="新建项目"
+                disabled={creatingProject}
+                onClick={() => void createProjectFromFolder()}
+              >
+                <LinearIcon name="plus" />
+              </button>
+            </div>
             {projects.map((project) => (
               <button
                 key={project.id}
@@ -2295,9 +2336,20 @@ export function App() {
         {!selectedProjectId ? (
           <section className="project-home">
             <div className="project-home-heading">
-              <span>任务面板</span>
-              <h1>选择项目</h1>
-              <p>从 Codex 项目开始，或继续使用之前保存的项目。</p>
+              <div className="project-home-titles">
+                <span>任务面板</span>
+                <h1>选择项目</h1>
+                <p>选择一个本地文件夹新建项目，或继续使用已有的项目。</p>
+              </div>
+              <button
+                className="project-home-create"
+                type="button"
+                disabled={creatingProject}
+                onClick={() => void createProjectFromFolder()}
+              >
+                <LinearIcon name="plus" />
+                {creatingProject ? "选择文件夹…" : "新建项目"}
+              </button>
             </div>
             {projectsLoading ? (
               <div className="project-grid project-grid-loading" aria-label="正在加载项目" aria-busy="true">
@@ -2366,7 +2418,16 @@ export function App() {
               <div className="project-home-empty">
                 <span className="empty-orbit" aria-hidden="true"><i /><i /></span>
                 <h2>还没有项目</h2>
-                <p>在 Codex 中创建项目后，再打开任务面板。</p>
+                <p>选择一个本地文件夹开始，项目名就是文件夹名。</p>
+                <button
+                  className="project-home-create"
+                  type="button"
+                  disabled={creatingProject}
+                  onClick={() => void createProjectFromFolder()}
+                >
+                  <LinearIcon name="folder" />
+                  {creatingProject ? "选择文件夹…" : "选择文件夹"}
+                </button>
               </div>
             )}
           </section>
@@ -2391,6 +2452,7 @@ export function App() {
               mutateTaskRelation("remove", current, type, relatedTaskId)
             )}
             onOpenThread={openThread}
+            onOpenChat={localAiChatAvailable ? setOpenChatThreadId : null}
             onOpenInThread={openTaskInThread}
             onArchive={archiveDetailTask}
             openingThread={openingThreadTaskId === detailTask.id}
@@ -2400,8 +2462,8 @@ export function App() {
         ) : boardView === "workflow" ? (
           <Suspense fallback={<div className="workflow-board-loading">正在打开节点模式…</div>}>
             <WorkflowBoard
-              key={selectedProject?.id ?? "local"}
-              projectId={selectedProject?.id ?? "local"}
+              key={selectedProjectId}
+              projectId={selectedProjectId}
               projectName={selectedProject?.name ?? "当前项目"}
               workspacePath={
                 selectedDeviceWorkspacePath
@@ -2527,11 +2589,9 @@ export function App() {
         />
       )}
 
-      <AiChat
-        available={localAiChatAvailable}
-        projectId={selectedProjectId || null}
-        issueId={detailTaskId}
-      />
+      {openChatThreadId && (
+        <AiChat threadId={openChatThreadId} onClose={() => setOpenChatThreadId(null)} />
+      )}
 
       <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
       {undoNotice && (

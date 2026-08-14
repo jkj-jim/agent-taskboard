@@ -715,17 +715,45 @@ test("context current selects the project with the most specific matching worksp
   assert.deepEqual(result.stdout.project, { id: "app", workspacePath: "/work/repo/packages/app" });
 });
 
-test("context current falls back to the local project", async () => {
+test("context current reports no project rather than guessing an unrelated one", async () => {
   const result = await run(
     ["context", "current", "--cwd", "/unmatched"],
     async () => response({ projects: [
       { id: "other", workspacePath: "/work/other" },
-      { id: "local", name: "Local", workspacePath: null },
+      { id: "second", workspacePath: "/work/second" },
     ] }),
   );
 
   assert.equal(result.exitCode, 0);
-  assert.equal(result.stdout.project.id, "local");
+  assert.equal(result.stdout.project, null);
+});
+
+test("context current resolves a project whose checkout only the device map knows", async () => {
+  const result = await run(
+    ["context", "current", "--cwd", "/work/repo/src"],
+    async (url) => (
+      String(url).includes("/api/device-workspaces")
+        ? response({ workspaces: { mapped: "/work/repo" } })
+        : response({ projects: [{ id: "mapped", name: "Mapped", workspacePath: null }] })
+    ),
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.project.id, "mapped");
+});
+
+test("context current still works when the device map is unavailable", async () => {
+  const result = await run(
+    ["context", "current", "--cwd", "/work/repo"],
+    async (url) => (
+      String(url).includes("/api/device-workspaces")
+        ? response({ error: { code: "LOCAL_COMPANION_REQUIRED", message: "no companion" } }, 503)
+        : response({ projects: [{ id: "repo", workspacePath: "/work/repo" }] })
+    ),
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.project.id, "repo");
 });
 
 test("issue and comment writes require agent conversation attribution", async () => {

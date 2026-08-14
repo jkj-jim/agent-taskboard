@@ -35,17 +35,14 @@ const CLAUDE_MODELS = [
 /**
  * Claude Code has no OS-level workspace sandbox, and headless `acceptEdits`
  * approves edits but denies every Bash call, which strands the agent. So
- * `workspace-write` runs unsandboxed too; the catalog says so out loud.
+ * `workspace-write` — the only tier the board starts a thread on — is an
+ * unsandboxed, unattended run. The other two are reachable only by threads
+ * created before that choice was fixed.
  */
 const PERMISSION_MODES = {
   "read-only": "plan",
   "workspace-write": "bypassPermissions",
   "danger-full-access": "bypassPermissions",
-};
-
-const SANDBOX_NOTES = {
-  "workspace-write": "Claude Code 没有 OS 级沙箱：该档位等同全放行，命令不会逐条审批。",
-  "danger-full-access": "与 workspace-write 相同：Claude Code 无沙箱隔离。",
 };
 
 /**
@@ -260,8 +257,6 @@ export function createClaudeAgent(config) {
           serviceTiers: [],
         })),
         skills: await listSkills(workspacePath),
-        sandboxes: ["read-only", "workspace-write", "danger-full-access"],
-        sandboxNotes: SANDBOX_NOTES,
       };
     },
 
@@ -284,6 +279,11 @@ export function createClaudeAgent(config) {
       args.push("--permission-mode", PERMISSION_MODES[thread.sandbox] ?? "acceptEdits");
       if (resuming) args.push("--resume", sessionId);
       else args.push("--session-id", sessionId);
+      // Without a name the `/resume` picker labels the session with the first
+      // prompt, which for a board turn is the injected context block rather
+      // than anything the user would recognise. Only on the opening turn, so a
+      // rename inside Claude Code survives the next one.
+      if (!resuming && thread.title) args.push("--name", thread.title);
 
       // Never lead with `/skill`: Claude Code treats a leading slash as a
       // command, so an uninstalled skill would swallow the whole prompt and

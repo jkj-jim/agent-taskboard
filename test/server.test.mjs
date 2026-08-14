@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -36,7 +36,13 @@ async function startServer(configure, listenOptions = {}) {
   });
   const address = await app.listen({ port: 0, ...listenOptions });
   runningApps.push({ app, directory });
-  return `http://127.0.0.1:${address.port}`;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  // Every task needs a project and the database no longer seeds one.
+  await request(baseUrl, "/api/projects", {
+    method: "POST",
+    body: { id: "local", name: "Local" },
+  });
+  return baseUrl;
 }
 
 async function request(baseUrl, pathname, options = {}) {
@@ -1025,23 +1031,37 @@ test("development context scan resolves the current Codex conversation workspace
   assert.equal(deviceResult.body.workspacePath, deviceWorkspace);
 });
 
-test("device workspaces come from this machine's Codex project roots", async () => {
+test("device workspaces cover both Codex's project roots and the board's own", async () => {
+  const parent = await realpath(await mkdtemp(path.join(os.tmpdir(), "taskboard-workspace-")));
+  const codexRoot = path.join(parent, "project-a");
+  const boardRoot = path.join(parent, "project-b");
+  await mkdir(codexRoot);
+  await mkdir(boardRoot);
   const baseUrl = await startServer(async (directory) => {
     const codexStatePath = path.join(directory, "codex-state.json");
     await writeFile(codexStatePath, JSON.stringify({
       "local-projects": {
-        "local-project-a": { rootPaths: ["/Users/alice/project-a"] },
-        "local-project-b": { rootPaths: ["/Users/alice/project-b"] },
+        "local-project-a": { rootPaths: [codexRoot] },
+        "local-gone": { rootPaths: [path.join(parent, "deleted")] },
       },
     }));
     return { codexStatePath };
   });
-  const result = await request(baseUrl, "/api/device-workspaces");
-  assert.equal(result.response.status, 200);
-  assert.deepEqual(result.body.workspaces, {
-    "local-project-a": "/Users/alice/project-a",
-    "local-project-b": "/Users/alice/project-b",
-  });
+  try {
+    await request(baseUrl, "/api/local/projects", {
+      method: "POST",
+      body: { workspacePath: boardRoot },
+    });
+    const result = await request(baseUrl, "/api/device-workspaces");
+    assert.equal(result.response.status, 200);
+    // A root that no longer exists is not a workspace, so it is left out.
+    assert.deepEqual(result.body.workspaces, {
+      "local-project-a": codexRoot,
+      "project-b": boardRoot,
+    });
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
 });
 
 test("accepts private LAN requests and rejects public Host and Origin headers", async () => {
@@ -1072,6 +1092,92 @@ test("accepts private LAN requests and rejects public Host and Origin headers", 
   });
   assert.equal(originResult.response.status, 403);
   assert.equal(originResult.body.error.code, "INVALID_ORIGIN");
+});
+
+test("a folder becomes a project, and picking it again reopens that project", async () => {
+  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "taskboard-workspace-")));
+  const baseUrl = await startServer();
+  try {
+    const created = await request(baseUrl, "/api/local/projects", {
+      method: "POST",
+      body: { workspacePath: workspace },
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.body.created, true);
+    assert.equal(created.body.project.name, path.basename(workspace));
+    assert.equal(created.body.project.workspacePath, workspace);
+    assert.equal(created.body.project.id, path.basename(workspace).toLowerCase());
+
+    const again = await request(baseUrl, "/api/local/projects", {
+      method: "POST",
+      body: { workspacePath: workspace },
+    });
+    assert.equal(again.response.status, 200);
+    assert.equal(again.body.created, false);
+    assert.equal(again.body.project.id, created.body.project.id);
+
+    const projects = await request(baseUrl, "/api/projects");
+    assert.equal(projects.body.projects.filter((project) => project.workspacePath === workspace).length, 1);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a folder Codex already tracks becomes the same project on the board", async () => {
+  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "taskboard-workspace-")));
+  const baseUrl = await startServer(async (directory) => {
+    const codexStatePath = path.join(directory, "codex-state.json");
+    await writeFile(codexStatePath, JSON.stringify({
+      "local-projects": { "codex-owned": { rootPaths: [workspace] } },
+    }));
+    return { codexStatePath };
+  });
+  try {
+    const created = await request(baseUrl, "/api/local/projects", {
+      method: "POST",
+      body: { workspacePath: workspace },
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.body.project.id, "codex-owned");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a folder whose name carries no slug still gets a usable project id", async () => {
+  const parent = await realpath(await mkdtemp(path.join(os.tmpdir(), "taskboard-workspace-")));
+  const workspace = path.join(parent, "知识流转系统");
+  await mkdir(workspace);
+  const baseUrl = await startServer();
+  try {
+    const created = await request(baseUrl, "/api/local/projects", {
+      method: "POST",
+      body: { workspacePath: workspace },
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.body.project.name, "知识流转系统");
+    assert.match(created.body.project.id, /^project-[0-9a-f]{12}$/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("creating a project from a folder rejects paths that are relative or absent", async () => {
+  const baseUrl = await startServer();
+
+  const relative = await request(baseUrl, "/api/local/projects", {
+    method: "POST",
+    body: { workspacePath: "relative/path" },
+  });
+  assert.equal(relative.response.status, 400);
+  assert.equal(relative.body.error.code, "INVALID_FIELD");
+
+  const missing = await request(baseUrl, "/api/local/projects", {
+    method: "POST",
+    body: { workspacePath: path.join(os.tmpdir(), "taskboard-not-here-1234") },
+  });
+  assert.equal(missing.response.status, 404);
+  assert.equal(missing.body.error.code, "WORKSPACE_NOT_FOUND");
 });
 
 test("project and task CRUD flow", async () => {
@@ -1195,7 +1301,7 @@ test("moving a task updates its status and sort order", async () => {
   const baseUrl = await startServer();
   const createResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Move me" },
+    body: { projectId: "local", title: "Move me" },
   });
   const task = createResult.body.task;
 
@@ -1215,6 +1321,7 @@ test("tasks can bind, change, and unbind one project workflow", async () => {
   const createResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
     body: {
+      projectId: "local",
       title: "Bind workflow",
       workflowId: "issue-delivery",
     },
@@ -1369,11 +1476,11 @@ test("issue relationship changes are broadcast in realtime", async () => {
   const baseUrl = await startServer();
   const first = (await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Realtime source" },
+    body: { projectId: "local", title: "Realtime source" },
   })).body.task;
   const second = (await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Realtime target" },
+    body: { projectId: "local", title: "Realtime target" },
   })).body.task;
 
   const eventResponse = await fetch(`${baseUrl}/api/events`);
@@ -1413,7 +1520,7 @@ test("all task statuses are accepted, filtered, and listed in workflow order", a
   for (const status of statuses) {
     const createResult = await request(baseUrl, "/api/tasks", {
       method: "POST",
-      body: { title: status, status },
+      body: { projectId: "local", title: status, status },
     });
     assert.equal(createResult.response.status, 201);
     assert.equal(createResult.body.task.status, status);
@@ -1436,7 +1543,7 @@ test("task and comment mutations keep content-specific conversation attribution"
   const baseUrl = await startServer();
   const createResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Keep attribution", threadId: "thread-original" },
+    body: { projectId: "local", title: "Keep attribution", threadId: "thread-original" },
   });
   const task = createResult.body.task;
   const updateResult = await request(baseUrl, `/api/tasks/${task.id}`, {
@@ -1469,7 +1576,7 @@ test("stale updates receive a version conflict", async () => {
   const baseUrl = await startServer();
   const createResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Concurrent edit" },
+    body: { projectId: "local", title: "Concurrent edit" },
   });
   const task = createResult.body.task;
 
@@ -1495,7 +1602,7 @@ test("issue comments can be created, edited, listed, and deleted", async () => {
   const baseUrl = await startServer();
   const createTaskResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Discuss me" },
+    body: { projectId: "local", title: "Discuss me" },
   });
   const task = createTaskResult.body.task;
 
@@ -1564,7 +1671,7 @@ test("taskctl issue creation and comments use the Codex Agent identity", async (
   const createTaskResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
     headers: agentHeaders,
-    body: { title: "Created by Codex", threadId: "thread-agent-create" },
+    body: { projectId: "local", title: "Created by Codex", threadId: "thread-agent-create" },
   });
   assert.equal(createTaskResult.response.status, 201);
   const task = createTaskResult.body.task;
@@ -1603,7 +1710,7 @@ test("Codex-hosted user mutations persist the current account identity and avata
   const createTaskResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
     headers: userHeaders,
-    body: { title: "Created in Codex UI" },
+    body: { projectId: "local", title: "Created in Codex UI" },
   });
   assert.equal(createTaskResult.response.status, 201);
   const task = createTaskResult.body.task;
@@ -1689,7 +1796,7 @@ test("issue attachments can be uploaded, listed, opened, downloaded, and deleted
   const baseUrl = await startServer();
   const createTaskResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Attach files" },
+    body: { projectId: "local", title: "Attach files" },
   });
   const task = createTaskResult.body.task;
 
@@ -1758,7 +1865,7 @@ test("comments support attachments and deleting a comment removes its files", as
   const baseUrl = await startServer();
   const createTaskResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Comment files" },
+    body: { projectId: "local", title: "Comment files" },
   });
   const task = createTaskResult.body.task;
   const createCommentResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
@@ -1808,7 +1915,7 @@ test("attachment uploads reject unsafe filenames", async () => {
   const baseUrl = await startServer();
   const createTaskResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Validate attachments" },
+    body: { projectId: "local", title: "Validate attachments" },
   });
   const task = createTaskResult.body.task;
 
@@ -1829,14 +1936,14 @@ test("request boundaries reject unknown fields and invalid values", async () => 
 
   const unknown = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Invalid", unexpected: true },
+    body: { projectId: "local", title: "Invalid", unexpected: true },
   });
   assert.equal(unknown.response.status, 400);
   assert.equal(unknown.body.error.code, "UNKNOWN_FIELD");
 
   const invalid = await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Invalid", status: "started" },
+    body: { projectId: "local", title: "Invalid", status: "started" },
   });
   assert.equal(invalid.response.status, 400);
   assert.equal(invalid.body.error.code, "INVALID_FIELD");
@@ -1847,6 +1954,7 @@ test("request boundaries reject unknown fields and invalid values", async () => 
   const invalidWorktree = await request(baseUrl, "/api/tasks", {
     method: "POST",
     body: {
+      projectId: "local",
       title: "Invalid",
       developmentContext: { type: "worktree", path: "/tmp/bad\0path", branch: null },
     },
@@ -1870,7 +1978,7 @@ test("task changes from one LAN client are broadcast to another client", async (
   const createResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
     headers: lanHeaders,
-    body: { title: "Broadcast me" },
+    body: { projectId: "local", title: "Broadcast me" },
   });
   assert.equal(createResult.response.status, 201);
 

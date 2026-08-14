@@ -2,12 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  createAiChatThread,
-  deleteAiChatThread,
   getAiChatCatalog,
   getAiChatThread,
   interruptAiChatRun,
-  listAiChatThreads,
   startAiChatTurn,
   subscribeAiChatThread,
   updateAiChatThread,
@@ -82,27 +79,15 @@ test("local AI API client follows the fixed catalog, thread, turn and interrupt 
     assert.equal(catalog.models[0].slug, "codex-real");
     assert.equal(calls.at(-1).path, "/api/local/ai/catalog?projectId=project%20%2F%20one");
 
-    assert.equal((await listAiChatThreads())[0].id, "thread-1");
-    await createAiChatThread({ projectId: "project / one", issueId: "issue-1" });
-    assert.deepEqual(JSON.parse(calls.at(-1).init.body), {
-      projectId: "project / one",
-      issueId: "issue-1",
-    });
-
     assert.equal((await getAiChatThread("thread-1")).thread.id, "thread-1");
     await updateAiChatThread("thread-1", {
       model: "codex-real",
       reasoningEffort: "high",
-      sandbox: "workspace-write",
     });
     assert.deepEqual(JSON.parse(calls.at(-1).init.body), {
       model: "codex-real",
       reasoningEffort: "high",
-      sandbox: "workspace-write",
     });
-
-    await deleteAiChatThread("thread-1");
-    assert.equal(calls.at(-1).init.method, "DELETE");
 
     await startAiChatTurn("thread-1", {
       message: "公开的用户消息",

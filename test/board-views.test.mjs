@@ -33,7 +33,7 @@ test("node mode lazy-loads WorkflowBoard while issue-only controls remain isolat
   assert.match(appSource, /lazy\(\(\) => import\("\.\/components\/WorkflowBoard"\)/);
   assert.match(appSource, /boardView === "issues" && <div className="toolbar-tools">/);
   assert.match(appSource, /boardView === "workflow" \? \([\s\S]*?<Suspense[\s\S]*?<WorkflowBoard/);
-  assert.match(appSource, /projectId=\{selectedProject\?\.id \?\? "local"\}/);
+  assert.match(appSource, /projectId=\{selectedProjectId\}/);
   assert.match(appSource, /onWorkflowsChange=\{setWorkflowOptions\}/);
   assert.match(workflowSource, /export function WorkflowBoard\(/);
   assert.match(workflowSource, /from "@xyflow\/react"/);
