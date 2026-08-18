@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Taskboard app icon</title>
+  <desc id="desc">Four task cards connected by a central agent hub on an indigo rounded square.</desc>
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="#5E5CE6"/>
+  <g fill="#FFFFFF">
+    <rect x="224" y="224" width="232" height="232" rx="56"/>
+    <rect x="568" y="224" width="232" height="232" rx="56" fill-opacity=".72"/>
+    <rect x="224" y="568" width="232" height="232" rx="56" fill-opacity=".72"/>
+    <rect x="568" y="568" width="232" height="232" rx="56"/>
+  </g>
+  <g fill="none" stroke="#FF8A48" stroke-linecap="round" stroke-width="36">
+    <path d="M512 512 650 374"/>
+    <path d="M512 512 374 650"/>
+    <path d="M512 512 650 650"/>
+  </g>
+  <g fill="#FF8A48">
+    <circle cx="512" cy="512" r="72"/>
+    <circle cx="650" cy="374" r="30"/>
+    <circle cx="374" cy="650" r="30"/>
+    <circle cx="650" cy="650" r="30"/>
+  </g>
+  <circle cx="512" cy="512" r="22" fill="#FFFFFF"/>
+</svg>
