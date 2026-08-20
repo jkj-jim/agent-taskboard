@@ -1321,7 +1321,7 @@ async function discoverSkills(codexExecutable, workspacePath) {
         id: 1,
         method: "initialize",
         params: {
-          clientInfo: { name: "codex-taskboard", version: "0.1.0" },
+          clientInfo: { name: "agent-taskboard", version: "0.1.0" },
           capabilities: { experimentalApi: true },
         },
       });

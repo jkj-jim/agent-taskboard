@@ -20,7 +20,7 @@ async function main() {
   const app = createTaskboardServer(options);
   const address = await app.listen(listen);
   console.log(
-    `Codex Taskboard listening on http://127.0.0.1:${address.port}`
+    `Agent Taskboard listening on http://127.0.0.1:${address.port}`
     + ` (${mode}${options.profile ? ` ${options.profile}` : ""} ${options.appVersion})`,
   );
   if (listen.host === "0.0.0.0") {
@@ -29,7 +29,7 @@ async function main() {
       .filter((entry) => entry?.family === "IPv4" && !entry.internal)
       .map((entry) => entry.address);
     for (const lanAddress of [...new Set(addresses)]) {
-      console.log(`Codex Taskboard available on LAN at http://${lanAddress}:${address.port}`);
+      console.log(`Agent Taskboard available on LAN at http://${lanAddress}:${address.port}`);
     }
   }
 

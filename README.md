@@ -1,4 +1,4 @@
-# Codex Taskboard
+# Agent Taskboard
 
 一个本地优先的任务看板，可在浏览器中运行，也可以通过独立 CDP 启动器或注入脚本嵌入 Codex。React UI 与捆绑的 Skill 所使用的 `taskctl` CLI 共用同一套 HTTP API。
 
@@ -8,11 +8,21 @@
 
 ## 环境要求
 
-- Node.js 22.5 或更高版本
+- Node.js 22.16 或更高版本（`.nvmrc` 固定了随包分发所用的版本）
 - 使用 Codex Agent 时：`codex` CLI
 - 使用 Claude Agent 时：`claude` CLI（Claude Code）
 
-## 本地运行
+## 桌面应用（macOS 14+ Apple Silicon）
+
+从 [Releases](https://github.com/jkj-jim/agent-taskboard/releases) 下载最新版本的 DMG。安装包自带 Node 运行时，本机装没装 Node 都不影响。
+
+**用访达把 `Agent Taskboard.app` 拖进「应用程序」再打开**，不要在磁盘映像里直接双击——带隔离属性的应用会被 macOS 挪到临时目录下启动（App Translocation），内置服务起不来。首次打开的放行步骤见每个 Release 里的《首次打开》一节。
+
+数据落在 `~/Library/Application Support/io.github.jkj-jim.agenttaskboard/profiles/production/`，卸载（删除 `.app`）不会触碰它。正式版与预发布版各用一份独立数据目录和端口，互不读写。
+
+应用内的更新走 GitHub Releases：稳定版会自动提示，预发布版只提供手动下载。
+
+## 本地运行（开发）
 
 ```bash
 npm install
@@ -20,7 +30,7 @@ npm run build
 npm start
 ```
 
-打开 <http://127.0.0.1:47823>。SQLite 数据库存储在 `.data/taskboard.sqlite`。
+打开 <http://127.0.0.1:47823>。SQLite 数据库存储在 `.data/taskboard.sqlite`。这条路径与桌面应用各用一份数据，互不影响。
 
 ## 项目
 
@@ -63,10 +73,10 @@ npm run taskctl -- issue create \
 `skills/manage-taskboard` 是一份两端共用的 Skill，把它软链到各自的 skills 目录即可：
 
 ```bash
-ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
+ln -s /absolute/path/to/agent-taskboard/skills/manage-taskboard \
   ~/.codex/skills/manage-taskboard
 
-ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
+ln -s /absolute/path/to/agent-taskboard/skills/manage-taskboard \
   ~/.claude/skills/manage-taskboard
 ```
 

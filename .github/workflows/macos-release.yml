@@ -189,6 +189,19 @@ jobs:
           fi
           cat FIRST-LAUNCH.md
 
+      - name: 抽取本版更新说明
+        # 正式版不给 --allow-missing：宁可让发布在这里失败，也不要发出一个说明
+        # 为空的 Release——Release 一建好 assets 就已经公开了，回头补说明容易漏。
+        run: |
+          version="${{ steps.channel.outputs.version }}"
+          if [ "${{ steps.channel.outputs.channel }}" = "stable" ]; then
+            node scripts/extract-changelog.mjs --version "$version" > RELEASE-NOTES.md
+          else
+            node scripts/extract-changelog.mjs --version "$version" --allow-missing > RELEASE-NOTES.md
+          fi
+          cat FIRST-LAUNCH.md >> RELEASE-NOTES.md
+          cat RELEASE-NOTES.md
+
       - name: 发布 stable（含 latest.json）
         if: steps.channel.outputs.channel == 'stable'
         env:
@@ -196,7 +209,6 @@ jobs:
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           bundle=src-tauri/target/release/bundle
-          cat CHANGELOG-latest.md FIRST-LAUNCH.md > RELEASE-NOTES.md
           gh release create "$tag" --title "$tag" --notes-file RELEASE-NOTES.md \
             || gh release edit "$tag" --draft=false
           gh release upload "$tag" \
@@ -218,6 +230,6 @@ jobs:
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           bundle=src-tauri/target/release/bundle
           # pre-release 只提供手动下载，绝不上传或覆盖 stable 的 latest.json。
-          gh release create "$tag" --title "$tag" --prerelease --notes-file FIRST-LAUNCH.md \
+          gh release create "$tag" --title "$tag" --prerelease --notes-file RELEASE-NOTES.md \
             || gh release edit "$tag" --prerelease
           gh release upload "$tag" "$bundle"/dmg/*.dmg --clobber

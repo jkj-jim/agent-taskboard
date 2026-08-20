@@ -356,7 +356,7 @@ function unauthorized() {
   return json(
     401,
     { error: { code: "UNAUTHORIZED", message: "Valid Basic credentials are required" } },
-    { "www-authenticate": 'Basic realm="Codex Taskboard", charset="UTF-8"' },
+    { "www-authenticate": 'Basic realm="Agent Taskboard", charset="UTF-8"' },
   );
 }
 
