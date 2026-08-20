@@ -9,6 +9,7 @@ import { afterEach, test } from "node:test";
 import { APP_ID, PROFILE_DEVELOPMENT } from "../shared/app-identity.mjs";
 import { APP_VERSION_FULL } from "../shared/app-version.generated.mjs";
 import { createTaskboardServer } from "../server/index.mjs";
+import { readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
 
 const runningApps = [];
 
@@ -25,6 +26,9 @@ async function startServer(configure, listenOptions = {}) {
   const options = configure ? await configure(directory) : {};
   const app = createTaskboardServer({
     dataDirectory: directory,
+    // 不注入的话「负责人是否可分配」会去探测跑测试的这台机器：本机装了 Codex
+    // 就 ready、CI 上没装就 409，同一份用例在两处结论不同。
+    agentRuntimeStatuses: readyAgentRuntimeStatuses(),
     codexDesktopController: {
       async inspect() { return { available: false }; },
       async createTask() { throw new Error("Codex desktop is unavailable in this fixture"); },

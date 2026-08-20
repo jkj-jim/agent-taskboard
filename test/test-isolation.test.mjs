@@ -1,0 +1,27 @@
+import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const testDirectory = path.dirname(fileURLToPath(import.meta.url));
+
+test("every server fixture pins the agent runtime instead of probing this machine", async () => {
+  // Agent 是否可分配、以及能选哪条 transport，默认都来自对本机的真实探测。
+  // 用例不注入存根时，本机装了 Codex 就通过、CI 上没装就 409/无 sessionId——
+  // 同一份用例在两处结论不同，而且只有发版时才会暴露。
+  const self = path.basename(fileURLToPath(import.meta.url));
+  const files = (await readdir(testDirectory))
+    .filter((name) => name.endsWith(".test.mjs") && name !== self);
+  const leaking = [];
+
+  for (const name of files) {
+    const source = await readFile(path.join(testDirectory, name), "utf8");
+    if (!source.includes("createTaskboardServer({")) continue;
+    const sites = source.split("createTaskboardServer({").length - 1;
+    const pinned = source.split("agentRuntimeStatuses").length - 1;
+    if (pinned < sites) leaking.push(`${name}：${sites} 处构造，只有 ${pinned} 处注入`);
+  }
+
+  assert.deepEqual(leaking, []);
+});
