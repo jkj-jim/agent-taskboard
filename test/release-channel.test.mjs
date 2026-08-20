@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { buildLatestJson, versionFromTag } from "../scripts/build-latest-json.mjs";
+import { buildLatestJson, releaseAssetName, versionFromTag } from "../scripts/build-latest-json.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,6 +40,19 @@ test("a stable latest.json points at the tagged arm64 artifact", () => {
   assert.deepEqual(Object.keys(latest.platforms), ["darwin-aarch64"]);
   assert.equal(latest.platforms["darwin-aarch64"].signature, "SIG");
   assert.match(latest.platforms["darwin-aarch64"].url, /\/releases\/download\/app-v2\.1\.0\//);
+});
+
+test("the updater URL uses the name GitHub actually gives the uploaded asset", () => {
+  // 产物叫 `Agent Taskboard.app.tar.gz`，GitHub 上传后把空格换成点。直接拼本地
+  // 文件名会 404，而这个 404 只发生在用户机器上：Release 页面看着完好，assets
+  // 也都在，只有自动更新静默失效——0.1.0 就是这样发出去的。
+  assert.equal(releaseAssetName("Agent Taskboard.app.tar.gz"), "Agent.Taskboard.app.tar.gz");
+  assert.equal(releaseAssetName("already.dotted.app.tar.gz"), "already.dotted.app.tar.gz");
+
+  const { url } = buildLatestJson({ ...artifact, version: "2.1.0" }).platforms["darwin-aarch64"];
+  assert.doesNotMatch(url, / /, "URL 里不该出现空格，也不该靠 %20 转义救回来");
+  assert.doesNotMatch(url, /%20/);
+  assert.ok(url.endsWith("/Agent.Taskboard.app.tar.gz"), url);
 });
 
 test("both workflows stay parseable YAML", async () => {

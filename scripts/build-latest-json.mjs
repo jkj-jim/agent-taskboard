@@ -29,19 +29,30 @@ export function versionFromTag(tag) {
   return parseAppVersion(tag.slice("app-v".length)).version;
 }
 
+/**
+ * GitHub 上传 release 资产时会把文件名里不合它规矩的字符替换掉，空格变成点。
+ * 本项目的产物叫 `Agent Taskboard.app.tar.gz`，传上去就成了
+ * `Agent.Taskboard.app.tar.gz`——直接把本地文件名拼进 URL 会 404，而 404 只发生在
+ * 用户机器上：Release 页面看着完好，assets 也都在，只有自动更新静默失效。
+ */
+export function releaseAssetName(localName) {
+  return localName.replaceAll(" ", ".");
+}
+
 export function buildLatestJson({ version, tag, signature, archiveName, pubDate }) {
   if (profileForVersion(version) !== "production") {
     throw new Error(
       `${version} 是 pre-release，不得写入 stable latest.json；beta 只提供手动下载`,
     );
   }
+  const assetName = releaseAssetName(archiveName);
   return {
     version,
     pub_date: pubDate,
     platforms: {
       "darwin-aarch64": {
         signature,
-        url: `https://github.com/jkj-jim/agent-taskboard/releases/download/${tag}/${archiveName}`,
+        url: `https://github.com/jkj-jim/agent-taskboard/releases/download/${tag}/${assetName}`,
       },
     },
   };
