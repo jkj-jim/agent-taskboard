@@ -14,6 +14,8 @@ import {
   isTaskPriority,
   isTaskStatus,
 } from "../shared/domain.mjs";
+import { APP_ID, PROFILE_DEVELOPMENT } from "../shared/app-identity.mjs";
+import { APP_VERSION_FULL } from "../shared/app-version.generated.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
 import {
   ASSIGNEE_TARGETS,
@@ -26,14 +28,24 @@ import {
 } from "../shared/agents.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { createAgentRegistry } from "./agents/index.mjs";
+import { createAgentLaunchCoordinator } from "./agents/launch.mjs";
+import { renderClaudeTaskInstruction } from "./agents/task-instruction.mjs";
+import { createAgentRuntimeStatuses } from "./agents/runtime-status.mjs";
+import {
+  applySkillTemplate,
+  diffSkillAgainstTemplate,
+  inspectSkillInstallation,
+} from "./agents/skill-install.mjs";
 import { createTaskctlRuntime } from "./agents/taskctl-bin.mjs";
 import { createDeviceWorkspaces } from "./agents/workspaces.mjs";
+import { workspaceKey } from "../shared/workspace-key.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
 import {
   createCodexDesktopController,
   createCodexTaskLaunchCoordinator,
 } from "./codex-desktop-controller.mjs";
 import { createWorkbuddyDesktopController } from "./workbuddy-desktop-controller.mjs";
+import { ensureWorkbuddyBoardAccess, verifyMcpEndpoint } from "./workbuddy-host-setup.mjs";
 import { createWorkbuddyTaskLaunchCoordinator } from "./workbuddy-task-launch.mjs";
 import { createMcpService } from "./mcp.mjs";
 import {
@@ -672,6 +684,17 @@ function parseAssigneeTarget(value) {
     );
   }
   return value;
+}
+
+/** 只读探测不该让界面无限等；超时抛出可读原因而不是挂着。 */
+function withDeadline(work, timeoutMs, message) {
+  return Promise.race([
+    work,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new ApiError(504, "SKILL_STATUS_TIMEOUT", message)), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
 }
 
 function resolveAssignee(target, actor) {
@@ -1377,12 +1400,19 @@ export function resolveServerOptions(options = {}) {
     : path.join(PROJECT_ROOT, ".data");
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   return {
+    // profile 只有安装版才有；开发版为 null，服务端不接受请求参数切换它。
+    profile: options.profile ?? null,
+    appVersion: options.appVersion ?? APP_VERSION_FULL,
     dataDirectory,
     databasePath: options.databasePath ?? path.join(dataDirectory, "taskboard.sqlite"),
     attachmentsDirectory: options.attachmentsDirectory ?? path.join(dataDirectory, "attachments"),
+    // 当前启动的易失状态，一期只有 Codex CDP 端口。
+    runtimeDirectory: options.runtimeDirectory ?? path.join(dataDirectory, "runtime"),
     cloudConfigPath: options.cloudConfigPath ?? path.join(dataDirectory, "cloud-companion.json"),
     staticDirectory: options.staticDirectory ?? path.join(PROJECT_ROOT, "dist", "web"),
     skillPath: options.skillPath ?? path.join(PROJECT_ROOT, "skills", "manage-taskboard", "SKILL.md"),
+    // 安装版由 --taskctl-cli-path 指到 Resources/cli；PROJECT_ROOT 只服务于开发和测试。
+    taskctlCliPath: options.taskctlCliPath ?? path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
     codexExecutable: options.codexExecutable ?? process.env.CODEX_EXECUTABLE ?? "codex",
     codexStatePath: options.codexStatePath
       ?? path.join(codexHome, ".codex-global-state.json"),
@@ -1413,6 +1443,8 @@ export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "0.0.0.0
 
 export function createTaskboardServer(options = {}) {
   const resolved = resolveServerOptions(options);
+  // 每次启动一个新的 instanceId，壳靠它区分「重连到同一个 sidecar」和「换了一个进程」。
+  const instanceId = randomUUID();
   const database = new TaskboardDatabase(resolved.databasePath);
   const events = new EventHub();
   const cloudConfig = options.cloudConfigStore ?? createCloudConfigStore({
@@ -1439,6 +1471,7 @@ export function createTaskboardServer(options = {}) {
   });
   const agents = createAgentRegistry({
     codex: {
+      inspectDesktop: () => codexDesktopController.inspect(),
       executable: resolved.codexExecutable,
       statePath: resolved.codexStatePath,
       skillPath: resolved.skillPath,
@@ -1453,12 +1486,33 @@ export function createTaskboardServer(options = {}) {
     workbuddy: {
       debuggingPort: options.workbuddyDebuggingPort,
       desktopController: options.workbuddyDesktopController,
+      // origin 要等 listen() 之后才知道，所以惰性求值。
+      verifyBoardMcp: () => verifyMcpEndpoint(`${taskctlRuntime.currentOrigin()}/mcp`),
     },
   });
   const taskctlRuntime = createTaskctlRuntime({
     binDirectory: path.join(resolved.dataDirectory, "bin"),
-    cliPath: path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
+    cliPath: resolved.taskctlCliPath,
   });
+  const agentRuntimeStatuses = options.agentRuntimeStatuses
+    ?? createAgentRuntimeStatuses({ registry: agents });
+
+  /**
+   * 保存任务前只快速校验这一个负责人对应的 Agent（§6）。只有拿到「新鲜且明确不可用」
+   * 的结论才拦；超时沿用旧状态、`unknown` 和「自己」都直接放行，探测问题不阻塞保存。
+   */
+  async function assertAssignableAgent(assigneeTarget) {
+    const agent = assigneeTarget ? agentByAssigneeTarget(assigneeTarget) : null;
+    if (!agent) return;
+    const runtime = await agentRuntimeStatuses.forInteraction(agent.kind);
+    if (runtime.status === "ready" || runtime.status === "unknown" || runtime.stale) return;
+    throw new ApiError(
+      409,
+      "AGENT_NOT_READY",
+      runtime.statusMessage || `${agent.label} 当前不可用，无法分配任务`,
+      { agentKind: agent.kind, runtime },
+    );
+  }
   const aiChat = new AiChatService({
     database,
     agents,
@@ -1557,6 +1611,14 @@ export function createTaskboardServer(options = {}) {
     desktopController: codexDesktopController,
     skillPath: resolved.skillPath,
     codexActorId: codexDefinition.actor.id,
+    // 同一目录被多个项目引用时收敛到同一个 Codex 项目（§9、§12）。
+    resolveCodexProjectId: async (task, workspacePath) => {
+      if (!workspacePath) return task.projectId;
+      const index = await deviceWorkspaces.byWorkspaceKey().catch(() => null);
+      const entry = index?.get(workspaceKey(workspacePath));
+      // 取索引里第一个项目 id 作为该目录的代表，保证同目录始终落在同一个 Codex 项目。
+      return entry?.projectIds[0] ?? task.projectId;
+    },
     resolveTaskctlShim: () => taskctlRuntime.shimPath(),
     loadTask: loadTaskForLaunch,
     resolveWorkspace: resolveTaskWorkspace,
@@ -1584,12 +1646,55 @@ export function createTaskboardServer(options = {}) {
   });
 
 
-  /**
-   * Launchers for agents the board cannot run itself. Codex is absent on
-   * purpose: its native launch is triggered by its own injected client.
-   */
+  /** Launchers for agents the board wakes inside their own client. */
   const hostTaskLaunchers = new Map([["workbuddy", workbuddyTaskLauncher]]);
 
+  // 启动所有权收敛在这里：任务写入完成后由它统一选 transport 并执行（§8）。
+  const launchCoordinator = createAgentLaunchCoordinator({
+    registry: agents,
+    runtimeStatuses: agentRuntimeStatuses,
+    runHeadless: async ({ agentKind, task }) => {
+      const thread = await aiChat.createThread({
+        projectId: task.projectId,
+        issueId: task.id,
+        agentKind,
+      });
+      const run = await aiChat.startTurn(thread.id, {
+        message: `执行任务 ${task.identifier}。`,
+      });
+      return { status: "started", threadId: thread.id, runId: run.id };
+    },
+    runNative: ({ task, expectedVersion, trigger, presentation, previousSessionId, transport, sourceRequest, cloud }) => (
+      codexTaskLauncher.launch({
+        taskId: task.id,
+        expectedVersion: expectedVersion ?? task.version,
+        trigger,
+        // native-draft 只预填不发送，native-submit 提交并捕获 canonical session ID。
+        presentation: transport === "native-draft" ? "foreground" : presentation,
+        previousSessionId,
+        cloud: Boolean(cloud),
+        sourceRequest,
+      })
+    ),
+    runHost: ({ agentKind, task, expectedVersion, trigger, presentation, previousSessionId, sourceRequest }) => {
+      const launcher = hostTaskLaunchers.get(agentKind);
+      if (!launcher) throw new Error(`${agentKind} has no host launcher`);
+      return launcher.launch({
+        taskId: task.id,
+        expectedVersion: expectedVersion ?? task.version,
+        trigger,
+        presentation,
+        previousSessionId,
+        cloud: false,
+        sourceRequest,
+      });
+    },
+  });
+
+  /**
+   * 状态迁移触发的自动启动。前端只提交一次业务请求，不再为任何 Agent
+   * 发起第二次启动调用。
+   */
   async function startAssignedAgentOnTransition(request, previous, task) {
     const enteredInProgress = previous.status !== "in_progress" && task.status === "in_progress";
     const assignedAgentInProgress = previous.status === "in_progress"
@@ -1602,61 +1707,17 @@ export function createTaskboardServer(options = {}) {
     ) {
       return null;
     }
-    const agent = agents.list().find((candidate) => candidate.actor.id === task.assignee.id);
-    if (!agent) return null;
-    // Codex's native launch is started by its own client, not from here.
-    if (agent.id === codexDefinition.kind) return null;
-
-    // Agents the board cannot run itself get a session woken in their client.
-    if (agent.capabilities?.headless === false) {
-      const launcher = hostTaskLaunchers.get(agent.id);
-      if (!launcher) return null;
-      try {
-        const launched = await launcher.launch({
-          taskId: task.id,
-          expectedVersion: task.version,
-          trigger: "status-transition",
-          presentation: "background",
-          previousSessionId: null,
-          // Cloud mode proxies `/api/tasks/*` upstream, so this only ever runs
-          // for a local task.
-          cloud: false,
-          sourceRequest: request,
-        });
-        return {
-          status: launched.status,
-          agentKind: agent.id,
-          sessionId: launched.sessionId ?? null,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
-        return { status: "failed", agentKind: agent.id, error: message.slice(0, 2_000) };
-      }
-    }
-
-    try {
-      const thread = await aiChat.createThread({
-        projectId: task.projectId,
-        issueId: task.id,
-        agentKind: agent.id,
-      });
-      const run = await aiChat.startTurn(thread.id, {
-        message: `执行任务 ${task.identifier}。`,
-      });
-      return {
-        status: "started",
-        agentKind: agent.id,
-        threadId: thread.id,
-        runId: run.id,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
-      return {
-        status: "failed",
-        agentKind: agent.id,
-        error: message.slice(0, 2_000),
-      };
-    }
+    return launchCoordinator.launch({
+      task,
+      expectedVersion: task.version,
+      taskId: task.id,
+      trigger: "status-transition",
+      presentation: "background",
+      previousSessionId: null,
+      sourceRequest: request,
+      // 云端模式下 /api/tasks/* 由代理转发，这条路径只会在本地任务上跑到。
+      cloud: false,
+    });
   }
 
   /** Where an agent client should reach this board, once it is listening. */
@@ -1712,7 +1773,16 @@ export function createTaskboardServer(options = {}) {
 
       if (pathname === "/health") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-        return sendJson(response, 200, { status: "ok" });
+        // 身份用于端口占用判定：壳只有确认 appId、profile 和版本都匹配才加载主窗口，
+        // 否则宁可报端口冲突也不误连。版本只来自编译期常量，不读 Info.plist。
+        return sendJson(response, 200, {
+          status: "ok",
+          appId: APP_ID,
+          profile: resolved.profile ?? PROFILE_DEVELOPMENT,
+          version: APP_VERSION_FULL,
+          pid: process.pid,
+          instanceId,
+        });
       }
 
       if (pathname === "/api/local/cloud-session") {
@@ -1868,16 +1938,13 @@ export function createTaskboardServer(options = {}) {
 
       if (pathname === "/api/local/agents") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-        assertNoQuery(url.searchParams, "/api/local/agents");
+        assertAllowedQuery(url.searchParams, new Set(["refresh"]), "GET /api/local/agents");
+        // 静态的名称与图标由 Web 从 shared/agents.mjs 按 kind 合并，这里只回 runtime 状态。
         return sendJson(response, 200, {
           defaultAgentKind: DEFAULT_AGENT_KIND,
-          agents: await Promise.all(agents.list().map(async (agent) => ({
-            id: agent.id,
-            label: agent.label,
-            actor: agent.actor,
-            assigneeTarget: agent.assigneeTarget,
-            ...(await agent.status()),
-          }))),
+          agents: await agentRuntimeStatuses.list({
+            force: url.searchParams.get("refresh") === "1",
+          }),
         });
       }
 
@@ -2027,6 +2094,97 @@ export function createTaskboardServer(options = {}) {
         }
       }
 
+      // 一键配置 WorkBuddy 的 MCP 连接：用户不填任何路径、端口或 URL（§11）。
+      if (pathname === "/api/local/workbuddy/configure") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "WorkBuddy configure");
+        const access = await ensureWorkbuddyBoardAccess({
+          origin: taskctlRuntime.currentOrigin(),
+          description: "Agent Taskboard",
+          profile: resolved.profile ?? undefined,
+        });
+        return sendJson(response, 200, {
+          serverName: access.mcp.serverName,
+          url: access.mcp.url,
+          configPath: access.mcp.path,
+          backupPath: access.mcp.backupPath ?? null,
+          changed: access.mcp.changed,
+          handshake: access.handshake,
+          requiresApproval: access.requiresApproval,
+          approvalHint: access.approvalHint,
+        });
+      }
+
+      // 共享 skill 的现状与本版本模板的差异（§7）。只读：是否应用由用户显式决定。
+      if (pathname === "/api/local/skill") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "Skill status");
+        const skillDirectory = path.dirname(resolved.skillPath);
+        const templateDirectory = path.join(PROJECT_ROOT, "skills", "manage-taskboard");
+        // 这条只读接口不值得让界面无限等：文件系统探测卡住时如实报超时。
+        const [installation, diff] = await withDeadline(
+          Promise.all([
+            inspectSkillInstallation({ skillDirectory, claudeHome: resolved.claudeHome }),
+            diffSkillAgainstTemplate({ skillDirectory, templateDirectory }),
+          ]),
+          5_000,
+          `读取 skill 状态超时（skill=${skillDirectory} template=${templateDirectory}）`,
+        );
+        return sendJson(response, 200, {
+          profile: resolved.profile ?? PROFILE_DEVELOPMENT,
+          // 只有 production 能写共享 skill；beta 与开发实例只读（§7）。
+          writable: resolved.profile === "production",
+          templateVersion: APP_VERSION_FULL,
+          ...installation,
+          diff,
+        });
+      }
+
+      // 手动应用新版模板：只有 production 能写，覆盖前先备份（§7）。
+      if (pathname === "/api/local/skill/apply") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "Skill template apply");
+        if (resolved.profile !== "production") {
+          throw new ApiError(
+            409,
+            "SKILL_READ_ONLY",
+            "只有 production 实例可以更新共享 skill；当前实例只读",
+          );
+        }
+        const applied = await withDeadline(
+          applySkillTemplate({
+            profile: resolved.profile,
+            skillDirectory: path.dirname(resolved.skillPath),
+            templateDirectory: path.join(PROJECT_ROOT, "skills", "manage-taskboard"),
+            profileDirectory: resolved.dataDirectory,
+            appliedAt: new Date().toISOString(),
+          }),
+          15_000,
+          "写入共享 skill 超时",
+        );
+        return sendJson(response, 200, applied);
+      }
+
+      // UI 不生成 Agent 最终提示词（§10）：deep link 打开草稿时向服务端要正文。
+      const taskInstructionRoute = pathname.match(/^\/api\/local\/tasks\/([^/]+)\/instruction$/);
+      if (taskInstructionRoute) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "Task instruction");
+        const taskId = decodeRouteSegment(taskInstructionRoute[1], "Task id");
+        const task = database.getTask(taskId);
+        if (!task) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${taskId}' does not exist`);
+        return sendJson(response, 200, {
+          instruction: renderClaudeTaskInstruction({
+            identifier: task.identifier,
+            taskctlShimPath: await taskctlRuntime.shimPath(),
+          }),
+        });
+      }
+
       const nativeCodexLaunchRoute = pathname.match(/^\/api\/local\/codex\/tasks\/([^/]+)\/launch$/);
       if (nativeCodexLaunchRoute) {
         if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
@@ -2034,13 +2192,22 @@ export function createTaskboardServer(options = {}) {
         assertNoQuery(url.searchParams, "Native Codex task launch");
         const taskId = decodeRouteSegment(nativeCodexLaunchRoute[1], "Task id");
         const launch = parseNativeCodexLaunch(await readJson(request));
+        // 云端模式下任务不在本地库里，按 launcher 同一条路径取。
+        const cloud = Boolean(currentCloudConfig?.remoteUrl);
+        const task = await loadTaskForLaunch(taskId, { cloud, sourceRequest: request });
+        if (!task) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${taskId}' does not exist`);
         let result;
         try {
-          result = await codexTaskLauncher.launch({
-            ...launch,
+          // 走同一个协调器：transport 选择、身份校验和幂等去重只有一处实现。
+          result = await launchCoordinator.launch({
+            task,
             taskId,
-            cloud: Boolean(currentCloudConfig?.remoteUrl),
+            expectedVersion: launch.expectedVersion,
+            trigger: launch.trigger,
+            presentation: launch.presentation,
+            previousSessionId: launch.previousSessionId ?? null,
             sourceRequest: request,
+            cloud,
           });
         } catch (error) {
           if (error instanceof ApiError) throw error;
@@ -2191,6 +2358,7 @@ export function createTaskboardServer(options = {}) {
         if (request.method === "POST") {
           const actor = actorFromRequest(request);
           const { assigneeTarget, ...input } = parseTaskCreate(await readJson(request));
+          await assertAssignableAgent(assigneeTarget);
           const task = database.createTask({
             ...input,
             threadId: codexOnlyThreadId(request, input.threadId),
@@ -2500,7 +2668,12 @@ export function createTaskboardServer(options = {}) {
           const { version, changes, threadId, assigneeTarget } = parseTaskPatch(await readJson(request));
           const previous = database.getTask(id);
           if (assigneeTarget !== undefined) {
-            changes.assignee = resolveAssignee(assigneeTarget, actorFromRequest(request));
+            const nextAssignee = resolveAssignee(assigneeTarget, actorFromRequest(request));
+            // 只在负责人真的换了 Agent 时校验；保留已有负责人不需要它仍然 ready。
+            if (previous?.assignee?.id !== nextAssignee.id) {
+              await assertAssignableAgent(assigneeTarget);
+            }
+            changes.assignee = nextAssignee;
           }
           const task = database.updateTask(id, version, changes, codexOnlyThreadId(request, threadId));
           rememberAgentSession(database, request, task.id, threadId);

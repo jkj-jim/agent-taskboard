@@ -31,6 +31,9 @@ const projectRoot = path.resolve(path.dirname(injectorPath), "..");
 const defaultCodexDebuggingPort = DEFAULT_CODEX_DEBUGGING_PORT;
 const launcherCodexUserDataPath = path.join(projectRoot, ".data", "codex-user-data");
 const injectionPath = path.join(projectRoot, "inject", "codex-taskboard.user.js");
+// 入口决定这次注入是否带可见面板：安装版只加载 automation，开发命令再叠加 panel（§3）。
+const automationEntryPath = path.join(projectRoot, "inject", "codex-automation.user.js");
+const panelEntryPath = path.join(projectRoot, "inject", "codex-taskboard-panel.user.js");
 const automationPoliciesPath = path.join(projectRoot, ".data", "codex-automation-policies.json");
 const taskboardOrigin = `http://127.0.0.1:${resolvePort()}`;
 const taskboardHealthUrl = `${taskboardOrigin}/health`;
@@ -63,6 +66,8 @@ function parseArgs(argv) {
     refresh: false,
     refreshIfRunning: false,
     attachExisting: false,
+    // 安装版的加载方式：只注入 automation bridge，不挂任何可见面板（§3）。
+    automationOnly: false,
     startupToken: null,
     daemon: false,
     screenshot: null,
@@ -77,6 +82,7 @@ function parseArgs(argv) {
     else if (arg === "--refresh") options.refresh = true;
     else if (arg === "--refresh-if-running") options.refreshIfRunning = true;
     else if (arg === "--attach-existing") options.attachExisting = true;
+    else if (arg === "--automation-only") options.automationOnly = true;
     else if (arg === "--startup-token") {
       options.startupToken = argv[++index];
       if (!/^[a-z0-9-]{1,100}$/i.test(options.startupToken || "")) {
@@ -1097,12 +1103,16 @@ async function injectInitial(
   );
 }
 
-async function currentInjectionSource() {
-  const userScript = await readFile(injectionPath, "utf8");
+async function currentInjectionSource({ panel = true } = {}) {
+  const [entry, userScript] = await Promise.all([
+    readFile(panel ? panelEntryPath : automationEntryPath, "utf8"),
+    readFile(injectionPath, "utf8"),
+  ]);
   const runtimeSource = `window.__CODEX_TASKBOARD_MANAGED_ORIGIN__ = ${JSON.stringify(taskboardOrigin)};
 if (typeof window.__CODEX_TASKBOARD_URL__ !== "string" || !window.__CODEX_TASKBOARD_URL__.trim()) {
   window.__CODEX_TASKBOARD_URL__ = ${JSON.stringify(taskboardPageUrl)};
 }
+${entry}
 ${userScript}`;
   const sourceHash = createHash("sha256").update(runtimeSource).digest("hex");
   return {
@@ -1173,7 +1183,7 @@ async function main() {
       await waitForLaunchedCodex(codexProcess, cdpVersionUrl, 30_000);
     }
 
-    let { source, sourceHash } = await currentInjectionSource();
+    let { source, sourceHash } = await currentInjectionSource({ panel: !options.automationOnly });
     const injectedTargets = new Map();
     const firstResults = await injectInitial(
       options.port,
@@ -1220,7 +1230,7 @@ async function main() {
         },
       });
       try {
-        const latestInjection = await currentInjectionSource();
+        const latestInjection = await currentInjectionSource({ panel: !options.automationOnly });
         if (latestInjection.sourceHash !== sourceHash) {
           injectedTargets.forEach((connection) => connection.close());
           injectedTargets.clear();

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Agent Taskboard</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: Canvas;
+        color: CanvasText;
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      }
+      main {
+        max-width: 34rem;
+        padding: 2rem;
+        text-align: center;
+      }
+      h1 {
+        margin: 0 0 0.75rem;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      p {
+        margin: 0 0 0.75rem;
+        opacity: 0.75;
+      }
+      code {
+        display: block;
+        margin: 0.75rem 0;
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        background: color-mix(in srgb, CanvasText 8%, Canvas);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        text-align: left;
+        word-break: break-all;
+      }
+      button {
+        margin-top: 0.5rem;
+        padding: 0.45rem 1.25rem;
+        border: 0;
+        border-radius: 999px;
+        background: AccentColor;
+        color: AccentColorText;
+        font: inherit;
+        cursor: pointer;
+      }
+      button[disabled] {
+        opacity: 0.5;
+        cursor: default;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="starting">
+        <p id="starting-text">正在启动 Agent Taskboard…</p>
+      </section>
+
+      <!-- 启动故障页只处理启动问题：展示原因、日志和重试，不涉及数据库恢复。 -->
+      <section id="failed" hidden>
+        <h1>Agent Taskboard 没能启动</h1>
+        <p id="reason"></p>
+        <p>完整日志：</p>
+        <code id="log-path"></code>
+        <button id="retry" type="button">重试</button>
+      </section>
+    </main>
+
+    <script>
+      const starting = document.getElementById("starting");
+      const startingText = document.getElementById("starting-text");
+      const failed = document.getElementById("failed");
+      const reason = document.getElementById("reason");
+      const logPath = document.getElementById("log-path");
+      const retry = document.getElementById("retry");
+
+      function render(payload) {
+        const isFailure = payload.state === "failed";
+        starting.hidden = isFailure;
+        failed.hidden = !isFailure;
+        if (isFailure) {
+          reason.textContent = payload.reason || "未知原因";
+          logPath.textContent = payload.logPath || "";
+          retry.disabled = false;
+          return;
+        }
+        startingText.textContent = payload.state === "restarting"
+          ? "服务意外退出，正在重新启动…"
+          : "正在启动 Agent Taskboard…";
+      }
+
+      const tauri = window.__TAURI__;
+      tauri.event.listen("startup", (event) => render(event.payload));
+
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        render({ state: "starting" });
+        tauri.core.invoke("retry_startup");
+      });
+    </script>
+  </body>
+</html>

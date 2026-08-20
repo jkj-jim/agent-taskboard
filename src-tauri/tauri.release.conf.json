@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/jkj-jim/agent-taskboard/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3ODJFNDc2NjQ4RTdFOEEKUldTS2ZvNWtkdVNDRjNhVzJsb2hUUzRWQ2p1VkF0VkdHQ3kza1F2NU0wM2FveDRWc2kwQjRXRzgK"
+    }
+  }
+}

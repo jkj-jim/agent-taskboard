@@ -65,12 +65,13 @@ test("new issues stage attachments in the composer and upload them after creatio
   assert.match(appSource, /附件上传失败，可在详情页重试/);
 });
 
-test("a new in-progress issue assigned to Codex starts a native task after creation writes finish", () => {
-  assert.match(appSource, /function shouldAutoLaunchCodex\(previous: Task \| null, task: Task\)/);
-  assert.match(appSource, /return previous === null[\s\S]*?previous\.status !== "in_progress"/);
+test("a new in-progress issue assigned to Codex is started by the server, not by a second client call", () => {
+  // 启动所有权收敛到服务端（§8）：前端只读同一次请求返回的 agentStart，
+  // 不再自己发起第二次原生启动。
+  assert.match(appSource, /function autoLaunchCodex\([\s\S]*?agentStart\?: \{/);
   assert.match(
     appSource,
-    /if \(creating && \(attachments\.length > 0 \|\| inlineImages\.length > 0\)\)[\s\S]*?if \(creating\) \{\s*const nativeLaunch = await autoLaunchCodex\(null, saved\)/,
+    /if \(creating && \(attachments\.length > 0 \|\| inlineImages\.length > 0\)\)[\s\S]*?if \(creating\) \{\s*const nativeLaunch = autoLaunchCodex\(null, saved, agentStart\)/,
   );
   assert.match(appSource, /nativeCodexStarted \? "，Codex 已在后台开始处理"/);
 });

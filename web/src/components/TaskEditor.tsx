@@ -5,6 +5,7 @@ import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   type ActorIdentity,
+  type AgentRuntimeStatus,
   type DevelopmentContext,
   type DevelopmentScan,
   type Recurrence,
@@ -19,6 +20,8 @@ import {
   actorKey,
   assigneeTargetForActor,
 } from "../actors";
+import { RUNTIME_STATE_LABELS, isReady, runtimeFor } from "../agentRuntime";
+import { agentByActorId } from "../agents";
 import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
@@ -60,6 +63,8 @@ interface TaskEditorProps {
   workflows: WorkflowOption[];
   currentUser: ActorIdentity;
   defaultAssignee: ActorIdentity;
+  agentRuntime: AgentRuntimeStatus[];
+  onRefreshAgentRuntime: () => void;
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
   onCancel: () => void;
@@ -110,6 +115,8 @@ export function TaskEditor({
   workflows,
   currentUser,
   defaultAssignee,
+  agentRuntime,
+  onRefreshAgentRuntime,
   developmentScan,
   developmentScanLoading,
   onCancel,
@@ -149,11 +156,28 @@ export function TaskEditor({
   }, [developmentContext, developmentScan.contexts]);
 
   const workflowAvailable = !workflowId || workflows.some((workflow) => workflow.id === workflowId);
+  // 新任务只可分配给 ready 的 Agent；已有负责人无论当前状态如何都保留在列表里，
+  // runtime 变化不改写历史任务（§6 负责人规则）。
   const assigneeOptions = [task?.assignee, currentUser, ...AGENT_ACTORS]
     .filter((actor): actor is ActorIdentity => actor !== undefined)
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
-    ));
+    ))
+    .filter((actor) => {
+      if (actor.type !== "agent") return true;
+      if (task?.assignee && actorKey(task.assignee) === actorKey(actor)) return true;
+      return isReady(agentRuntime, agentByActorId(actor.id)?.kind);
+    });
+
+  // 状态未知的 Agent 不静默消失：以不可选项呈现，并给出重试入口。
+  const unknownAgents = AGENT_ACTORS.filter((actor) => {
+    if (task?.assignee && actorKey(task.assignee) === actorKey(actor)) return false;
+    return runtimeFor(agentRuntime, agentByActorId(actor.id)?.kind)?.status === "unknown";
+  });
+
+  const assigneeRuntime = assignee.type === "agent"
+    ? runtimeFor(agentRuntime, agentByActorId(assignee.id)?.kind)
+    : undefined;
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -332,7 +356,22 @@ export function TaskEditor({
                     {actor.id === currentUser.id ? `${actor.name}（我）` : actor.name}
                   </option>
                 ))}
+                {unknownAgents.map((actor) => (
+                  <option value={actorKey(actor)} key={actorKey(actor)} disabled>
+                    {actor.name}（状态未知）
+                  </option>
+                ))}
               </select>
+              {assigneeRuntime && assigneeRuntime.status !== "ready" && (
+                <button
+                  type="button"
+                  className="assignee-runtime-hint"
+                  title={assigneeRuntime.statusMessage ?? ""}
+                  onClick={onRefreshAgentRuntime}
+                >
+                  {RUNTIME_STATE_LABELS[assigneeRuntime.status]} · 重新检测
+                </button>
+              )}
             </label>
             <LabelPicker
               availableLabels={availableLabels}

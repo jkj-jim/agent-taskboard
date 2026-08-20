@@ -34,6 +34,7 @@ import {
   listProjects,
   listTasks,
   launchHostAgentTask,
+  getTaskInstruction,
   launchNativeCodexTask,
   openHostAgentSession,
   moveTask as moveTaskRequest,
@@ -47,6 +48,8 @@ import {
   actorForAssigneeTarget,
   assigneeTargetForActor,
 } from "./actors";
+import { isReady, useAgentRuntime } from "./agentRuntime";
+import { AgentStatusBar } from "./components/AgentStatusBar";
 import {
   agentByActorId,
   agentLabel,
@@ -386,11 +389,6 @@ function workspaceName(path?: string): string | null {
   return parts.at(-1) ?? path;
 }
 
-/** Mirrors the server's `shellQuote`: agents paste these paths into a shell. */
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
@@ -430,15 +428,6 @@ function sortTasks(tasks: Task[]): Task[] {
 function taskAgentSessionId(task: Task, agentKind: AgentKind): string | null {
   return task.agentSessions?.find((session) => session.agentKind === agentKind)?.sessionId
     ?? (agentKind === "codex" ? task.threadId : null);
-}
-
-function shouldAutoLaunchCodex(previous: Task | null, task: Task): boolean {
-  if (task.status !== "in_progress" || agentByActorId(task.assignee.id)?.kind !== "codex") {
-    return false;
-  }
-  return previous === null
-    || previous.status !== "in_progress"
-    || (previous.status === "in_progress" && previous.assignee.id !== task.assignee.id);
 }
 
 function taskToDraft(task: Task): TaskDraft {
@@ -655,7 +644,14 @@ export function App() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
   const currentUser = hostContext?.user ?? DEFAULT_USER_ACTOR;
-  const defaultAssignee = actorForAssigneeTarget(defaultAssigneeTarget, currentUser);
+  const agentRuntime = useAgentRuntime();
+  const defaultAssigneeCandidate = actorForAssigneeTarget(defaultAssigneeTarget, currentUser);
+  // 默认 Agent 不是 ready 时，新任务回退为「自己」（§6 负责人规则）。
+  const defaultAssignee = defaultAssigneeCandidate.type === "agent"
+    && agentRuntime.loaded
+    && !isReady(agentRuntime.agents, agentByActorId(defaultAssigneeCandidate.id)?.kind)
+    ? currentUser
+    : defaultAssigneeCandidate;
   const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId];
   const selectedProjectAutomation = projectAutomations[selectedProjectId];
   const automationProjectContext = useMemo(() => {
@@ -1451,29 +1447,24 @@ export function App() {
       : `${identifier} 已更新。请回到运行 Codex 的电脑后，在客户端中打开此任务。`;
   }
 
-  async function autoLaunchCodex(
-    previous: Task | null,
+  /**
+   * 启动所有权已经收敛到服务端（§8）：任务写入的那一次请求就会选好 transport
+   * 并启动，前端不再为 Codex 发起第二次调用，只负责把失败原因显示出来。
+   */
+  function autoLaunchCodex(
+    _previous: Task | null,
     task: Task,
-  ): Promise<{ task: Task; started: boolean }> {
-    if (!shouldAutoLaunchCodex(previous, task)) return { task, started: false };
-    if (taskboardMetadata?.capabilities?.nativeCodexTaskLaunch !== true) {
-      setActionError(unavailableNativeCodexMessage(task.identifier));
-      return { task, started: false };
-    }
-    try {
-      const result = await launchNativeCodexTask(
-        task,
-        "status-transition",
-        "background",
-        taskAgentSessionId(task, "codex"),
-      );
-      return { task: result.task, started: true };
-    } catch (error) {
+    agentStart?: { status?: string; agentKind?: string; error?: string } | null,
+  ): { task: Task; started: boolean } {
+    if (!agentStart) return { task, started: false };
+    if (agentStart.status === "failed") {
       setActionError(
-        `${task.identifier} 已进入进行中，但未能在 Codex 客户端启动：${errorMessage(error)}`,
+        `${task.identifier} 已保存，但未能在 ${agentStart.agentKind ?? "Agent"} 中启动：`
+        + `${agentStart.error ?? "未知原因"}`,
       );
       return { task, started: false };
     }
+    return { task, started: agentStart.status === "started" };
   }
 
   async function saveEditor(
@@ -1492,7 +1483,7 @@ export function App() {
         const result = await updateTaskRequest(editor.task, draft);
         saved = result.task;
         agentStart = result.agentStart;
-        const nativeLaunch = await autoLaunchCodex(editor.task, saved);
+        const nativeLaunch = autoLaunchCodex(editor.task, saved, agentStart);
         saved = nativeLaunch.task;
         nativeCodexStarted = nativeLaunch.started;
       } else {
@@ -1528,7 +1519,7 @@ export function App() {
         }
       }
       if (creating) {
-        const nativeLaunch = await autoLaunchCodex(null, saved);
+        const nativeLaunch = autoLaunchCodex(null, saved, agentStart);
         saved = nativeLaunch.task;
         nativeCodexStarted = nativeLaunch.started;
       }
@@ -1625,9 +1616,9 @@ export function App() {
 
     try {
       const movedResult = await moveTaskRequest(task, status, sortOrder);
-      const nativeLaunch = await autoLaunchCodex(task, movedResult.task);
-      const moved = nativeLaunch.task;
       const { agentStart } = movedResult;
+      const nativeLaunch = autoLaunchCodex(task, movedResult.task, agentStart);
+      const moved = nativeLaunch.task;
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === moved.id ? moved : candidate,
       )));
@@ -1699,9 +1690,9 @@ export function App() {
         task,
         { ...taskToDraft(task), ...changes },
       );
-      const nativeLaunch = await autoLaunchCodex(task, updateResult.task);
-      const updated = nativeLaunch.task;
       const { agentStart } = updateResult;
+      const nativeLaunch = autoLaunchCodex(task, updateResult.task, agentStart);
+      const updated = nativeLaunch.task;
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === updated.id ? updated : candidate,
       )));
@@ -1857,15 +1848,9 @@ export function App() {
       ?? hostContext?.workspacePath;
     // The assignee decides which client picks the work up.
     const agentKind = agentByActorId(task.assignee.id)?.kind ?? "codex";
-    // A deeplinked client is spawned by its own app, not by the board, so it
-    // never inherits the PATH carrying `taskctl`; hand it the shim outright.
-    const taskctlShim = taskboardMetadata?.taskctlShimPath;
-    const prompt = [
-      `使用 manage-taskboard skill 执行任务 ${task.identifier}。`,
-      ...(taskctlShim
-        ? [`本任务中的每一次 Taskboard 操作都使用 ${shellQuote(taskctlShim)}。`]
-        : []),
-    ].join("");
+    // 正文由服务端 renderer 产出，UI 不再自己拼（§10）。deeplink 打开的客户端
+    // 由它自己的 app 拉起，不会继承带 `taskctl` 的 PATH，所以正文里带着绝对 shim。
+    const prompt = await getTaskInstruction(task.id);
 
     // Agents without a URL scheme are started by the board driving their own
     // client, which also means the board writes the instruction rather than
@@ -2255,6 +2240,14 @@ export function App() {
           <div ref={dragRegionRef} className="home-window-drag-region" aria-hidden="true" />
         )}
 
+        {selectedProjectId && !detailTask && (
+          <AgentStatusBar
+            agents={agentRuntime.agents}
+            loaded={agentRuntime.loaded}
+            refreshing={agentRuntime.refreshing}
+            onRefresh={agentRuntime.refresh}
+          />
+        )}
         {selectedProjectId && !detailTask && <div className="board-toolbar">
           <div className="view-tabs" aria-label="看板视图">
             <button
@@ -2557,6 +2550,8 @@ export function App() {
           workflows={workflowOptions}
           currentUser={currentUser}
           defaultAssignee={defaultAssignee}
+          agentRuntime={agentRuntime.agents}
+          onRefreshAgentRuntime={agentRuntime.refresh}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}
           onCancel={() => setEditor(null)}

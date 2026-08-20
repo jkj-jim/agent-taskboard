@@ -7,7 +7,7 @@ import {
   codexTargets,
 } from "../shared/codex-cdp.mjs";
 import { ApiError } from "./database.mjs";
-import { shellQuote } from "./agents/taskctl-bin.mjs";
+import { renderCodexTaskInstruction } from "./agents/task-instruction.mjs";
 
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INJECTION_KEY = "__codexTaskboardInjection__";
@@ -685,6 +685,8 @@ export function createCodexTaskLaunchCoordinator({
   resolveTaskctlShim,
   skillPath,
   codexActorId,
+  // 默认沿用「看板项目 id 即 Codex 项目 id」；传入索引后同一目录的多个项目会收敛。
+  resolveCodexProjectId = async (task) => task.projectId,
 }) {
   let creationQueue = Promise.resolve();
   const launches = new Map();
@@ -707,26 +709,19 @@ export function createCodexTaskLaunchCoordinator({
         `Project '${task.projectId}' has no available device workspace`,
       );
     }
-    const taskctlShim = await resolveTaskctlShim();
-    const quotedTaskctlShim = shellQuote(taskctlShim);
-    const quotedIdentifier = shellQuote(task.identifier);
-    const instruction = [
-      `执行任务 ${task.identifier}。`,
-      `本任务中的每一次 Taskboard 操作都使用 ${quotedTaskctlShim}；`,
-      `先运行 ${quotedTaskctlShim} issue brief ${quotedIdentifier} --json。`,
-    ].join(" ");
-    if (instruction.length > 1_024) {
-      throw new ApiError(
-        409,
-        "CODEX_INSTRUCTION_TOO_LONG",
-        "The native Codex task instruction exceeds 1,024 characters",
-      );
-    }
+    // 正文只在 Agent renderer 里成形，这里不再拼装（§10）。
+    // 同一目录可能被多个看板项目引用；用规范化 workspace 键收敛到同一个 Codex
+    // 项目，避免在 Codex 侧建出两份（§9、§12）。解析不出映射时退回项目 id 直连。
+    const codexProjectId = await resolveCodexProjectId(task, workspacePath);
+    const instruction = renderCodexTaskInstruction({
+      identifier: task.identifier,
+      taskctlShimPath: await resolveTaskctlShim(),
+    });
     return {
       workspacePath,
       // The board and the Codex client key projects by the same id, so the
       // sidebar row is found without a name lookup.
-      projectId: task.projectId,
+      projectId: codexProjectId,
       instruction,
       title: task.title,
       skillPath,

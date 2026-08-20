@@ -83,7 +83,7 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
    claude auth status   # loggedIn 必须为 true
    ```
 
-   看板服务会在 `GET /api/local/agents` 里上报每个 Agent 的可用性与登录状态；当前界面尚未消费该接口，因此启动 Claude 任务前仍需用上面的命令确认 CLI 已登录。
+   看板顶部的状态区会展示三个 Agent 的实时可用状态，数据来自 `GET /api/local/agents`。未登录时那里会直接给出对应动作（Claude 是复制 `claude auth login`，看板不会代跑终端命令）。新任务只能分配给状态为「可用」的 Agent；已有任务的负责人不受状态变化影响。
 
 2. **确认项目能解析到本机目录。** 工作区解析与 Agent 无关，按顺序取三个来源：Codex 应用维护的本机项目路径表、项目自身的 `workspacePath`（从文件夹新建的项目自带）、以及 `taskctl project map` 写下的设备映射。多数项目会自动命中；若报 `PROJECT_WORKSPACE_UNAVAILABLE`，显式映射一次即可：
 

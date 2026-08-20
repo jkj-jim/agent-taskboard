@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -18,6 +18,16 @@ import path from "node:path";
  */
 
 export const WORKBUDDY_SERVER_NAME = "taskboard";
+
+/**
+ * 三套实例用不同的 MCP 名称，授权与 origin 一一对应，互不复用（§5、§11）。
+ * 开发实例保持既有名称，避免改动开发机上已经授权过的条目。
+ */
+export function workbuddyServerNameForProfile(profile) {
+  if (profile === "production") return "agent-taskboard";
+  if (profile === "beta") return "agent-taskboard-beta";
+  return WORKBUDDY_SERVER_NAME;
+}
 
 export function workbuddyHomeDirectory(homeDirectory = os.homedir()) {
   return path.join(homeDirectory, ".workbuddy");
@@ -135,10 +145,22 @@ export async function ensureMcpRegistration({
     };
   }
 
-  const next = { ...existing, mcpServers: { ...servers, [serverName]: wanted } };
+  const next = { ...existing, mkdirPlaceholder: undefined, mcpServers: { ...servers, [serverName]: wanted } };
+  delete next.mkdirPlaceholder;
   await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  return { path: configPath, changed: true, serverName, url: wanted.url };
+
+  // 先备份再原子写入：WorkBuddy 的 mcp.json 里可能有用户自己配的其他服务器，
+  // 半截写入会把它们一起毁掉（§11）。
+  let backupPath = null;
+  if (existing !== null) {
+    backupPath = `${configPath}.taskboard-backup`;
+    await writeFile(backupPath, `${JSON.stringify(existing, null, 2)}\n`, "utf8");
+  }
+  const temporaryPath = `${configPath}.taskboard-tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await rename(temporaryPath, configPath);
+
+  return { path: configPath, changed: true, serverName, url: wanted.url, backupPath };
 }
 
 /**
@@ -180,12 +202,50 @@ export async function ensureSkillInstalled({
  * and should not forge that decision, so a changed registration is reported as
  * `requiresApproval` with the exact place to click.
  */
+/**
+ * 握手校验：配置写对了不等于连得上。向自己的 /mcp 发一次 tools/list，
+ * 确认看板工具真的能被列出，否则只报 needs_setup，不谎称 ready（§11）。
+ */
+export async function verifyMcpEndpoint(url, fetchImplementation = globalThis.fetch) {
+  try {
+    const response = await fetchImplementation(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return { ok: false, detail: `MCP 握手返回 HTTP ${response.status}` };
+    // 响应是 SSE 帧（`event: message` + `data: {...}`），不是裸 JSON。
+    // 工具名以服务端注册的原名返回（get_task 等）；客户端看到的
+    // `<serverName>_get_task` 前缀是它自己按服务器名加的，这里不能按前缀找。
+    const text = await response.text();
+    const payload = text.split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .find((chunk) => chunk.startsWith("{"));
+    let tools = [];
+    try {
+      tools = JSON.parse(payload ?? text)?.result?.tools ?? [];
+    } catch {
+      return { ok: false, detail: "MCP 握手返回了无法解析的响应" };
+    }
+    return tools.some((tool) => tool?.name === "get_task")
+      ? { ok: true, detail: "", tools: tools.length }
+      : { ok: false, detail: "MCP 握手成功但没有列出看板工具" };
+  } catch (error) {
+    return { ok: false, detail: `MCP 握手失败：${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 export async function ensureWorkbuddyBoardAccess({
   origin,
   description,
   skillPath,
-  serverName = WORKBUDDY_SERVER_NAME,
+  profile = null,
+  // profile 决定 MCP 名称；未传 profile 时保持既有名称，不改动已授权的配置。
+  serverName = profile ? workbuddyServerNameForProfile(profile) : WORKBUDDY_SERVER_NAME,
   homeDirectory = os.homedir(),
+  verifyEndpoint = verifyMcpEndpoint,
 }) {
   const mcp = await ensureMcpRegistration({
     origin,
@@ -193,13 +253,16 @@ export async function ensureWorkbuddyBoardAccess({
     serverName,
     homeDirectory,
   });
+  // 配置写对不等于连得上：握手不通就如实报出来，由调用方决定呈现什么动作。
+  const handshake = await verifyEndpoint(mcp.url);
   const skill = skillPath
     ? await ensureSkillInstalled({ skillPath, homeDirectory })
     : { path: null, changed: false, name: null };
   return {
     mcp,
     skill,
-    requiresApproval: mcp.changed,
+    handshake,
+    requiresApproval: mcp.changed || !handshake.ok,
     approvalHint: mcp.changed
       ? `在 WorkBuddy 的「专家·技能·连接器 → 连接器 → MCP 服务管理」中启用 ${serverName}，然后重启 WorkBuddy。`
       : "",

@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 
 import { createTaskboardServer } from "../server/index.mjs";
 import { SKILL_MARKER } from "../server/agents/prompt.mjs";
+import { readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
 
 const execFile = promisify(execFileCallback);
 
@@ -100,6 +101,9 @@ if (args[0] === "auth" && args[1] === "status") {
     codexStatePath,
     skillPath: "/fixture/manage-taskboard/SKILL.md",
     codexDesktopController,
+    // 这些用例验证的是启动与 session 绑定，Agent 的真实可用性由
+    // test/agent-runtime.test.mjs 单独覆盖，这里固定为 ready。
+    agentRuntimeStatuses: overrides.agentRuntimeStatuses ?? readyAgentRuntimeStatuses(),
   });
   const address = await app.listen({ host, port: 0 });
   const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -250,24 +254,12 @@ test("a user move into in progress is launched natively exactly once without cod
       },
     );
     assert.equal(moved.response.status, 200);
-    assert.equal(moved.body.agentStart, undefined);
+    // 启动所有权在服务端：状态迁移这一次请求就完成了原生启动，前端不再补第二刀。
+    assert.equal(moved.body.agentStart.status, "started");
+    assert.equal(moved.body.agentStart.agentKind, "codex");
+    assert.equal(moved.body.agentStart.transport, "native-submit");
 
-    const launchBody = {
-      expectedVersion: moved.body.task.version,
-      trigger: "status-transition",
-      presentation: "background",
-      previousSessionId: null,
-    };
-    const launched = await request(
-      fixture.baseUrl,
-      `/api/local/codex/tasks/${created.body.task.id}/launch`,
-      { method: "POST", body: launchBody },
-    );
-    assert.equal(launched.response.status, 200);
-    assert.equal(launched.body.status, "started");
-    assert.equal(launched.body.agentKind, "codex");
-    // A session woken in Codex's own client has no board-run transcript, which
-    // is what `chatThreadId: null` says and what hides the conversation button.
+    const launched = { body: moved.body.agentStart };
     assert.deepEqual(launched.body.task.agentSessions, [
       {
         agentKind: "codex",
@@ -284,18 +276,9 @@ test("a user move into in progress is launched natively exactly once without cod
       new RegExp(`^执行任务 ${created.body.task.identifier}。`),
     );
     assert.equal(fixture.nativeLaunches[0].instruction.includes(`'${taskctlShim}'`), true);
-    assert.match(fixture.nativeLaunches[0].instruction, /每一次 Taskboard 操作都使用/);
+    assert.match(fixture.nativeLaunches[0].instruction, /本轮后续 Taskboard 操作也只使用该入口/);
     assert.match(fixture.nativeLaunches[0].instruction, /issue brief/);
     assert.equal(fixture.nativeLaunches[0].presentation, "background");
-
-    const duplicate = await request(
-      fixture.baseUrl,
-      `/api/local/codex/tasks/${created.body.task.id}/launch`,
-      { method: "POST", body: launchBody },
-    );
-    assert.equal(duplicate.response.status, 200);
-    assert.equal(duplicate.body.sessionId, launched.body.sessionId);
-    assert.equal(fixture.nativeLaunches.length, 1);
 
     const reordered = await request(
       fixture.baseUrl,
@@ -435,10 +418,13 @@ test("native Codex launch failures return the actionable injector error", async 
         },
       },
     );
-    assert.equal(launched.response.status, 502);
-    assert.equal(launched.body.error.code, "CODEX_NATIVE_TASK_LAUNCH_FAILED");
+    // transport 失败不回滚任务数据，而是带着可执行的恢复动作返回（§8）。
+    assert.equal(launched.response.status, 200);
+    assert.equal(launched.body.status, "failed");
+    assert.equal(launched.body.agentKind, "codex");
+    assert.equal(launched.body.transport, "native-draft");
     assert.equal(
-      launched.body.error.message,
+      launched.body.error,
       "Timed out while selecting the manage-taskboard Skill",
     );
   } finally {
@@ -465,20 +451,9 @@ test("the native taskctl shim uses the random listening port for reads and later
         status: "in_progress",
       },
     });
-    const launched = await request(
-      fixture.baseUrl,
-      `/api/local/codex/tasks/${created.body.task.id}/launch`,
-      {
-        method: "POST",
-        body: {
-          expectedVersion: moved.body.task.version,
-          trigger: "status-transition",
-          presentation: "background",
-          previousSessionId: null,
-        },
-      },
-    );
-    assert.equal(launched.response.status, 200);
+    // 服务端已在这一次 move 里完成原生启动，前端不再补第二次调用（§8）。
+    const launched = { body: moved.body.agentStart };
+    assert.equal(launched.body.status, "started");
 
     const shimPath = path.join(fixture.directory, "bin", "taskctl");
     const agentEnv = {
@@ -602,21 +577,10 @@ test("detail-style patches leave Codex for native launch while Claude keeps its 
       },
     });
     assert.equal(started.response.status, 200);
-    assert.equal(started.body.agentStart, undefined);
-    const native = await request(
-      fixture.baseUrl,
-      `/api/local/codex/tasks/${created.body.task.id}/launch`,
-      {
-        method: "POST",
-        body: {
-          expectedVersion: started.body.task.version,
-          trigger: "status-transition",
-          presentation: "background",
-          previousSessionId: null,
-        },
-      },
-    );
-    assert.equal(native.response.status, 200);
+    // 只有进入进行中这一次转换会启动，且由服务端自己完成（§8）。
+    assert.equal(started.body.agentStart.status, "started");
+    assert.equal(started.body.agentStart.agentKind, "codex");
+    assert.equal(started.body.agentStart.transport, "native-submit");
     assert.equal(fixture.nativeLaunches.length, 1);
 
     const alreadyActive = await request(fixture.baseUrl, "/api/tasks", {

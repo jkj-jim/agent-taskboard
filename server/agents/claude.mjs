@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 
 import { ApiError } from "../database.mjs";
 import { agentByKind } from "../../shared/agents.mjs";
+import { unknownRuntimeStatus } from "../../shared/agent-runtime.mjs";
+import { isSkillDiscoverable } from "./skill-install.mjs";
 import {
   SKILL_MARKER,
   renderSkillMarkers,
@@ -226,9 +228,11 @@ export function createClaudeAgent(config) {
         stdout = error?.stdout;
         if (typeof stdout !== "string" || stdout.trim() === "") {
           return {
-            available: false,
-            authenticated: false,
-            detail: `无法运行 ${executable}：${error instanceof Error ? error.message : String(error)}`,
+            status: "unavailable",
+            transports: [],
+            reasonCode: "AGENT_NOT_INSTALLED",
+            statusMessage: `无法运行 ${executable}：${error instanceof Error ? error.message : String(error)}`,
+            action: agentDownloadAction(definition.kind, definition.label),
           };
         }
       }
@@ -236,15 +240,42 @@ export function createClaudeAgent(config) {
       try {
         parsed = JSON.parse(stdout);
       } catch {
-        return { available: true, authenticated: null, detail: "" };
+        // CLI 在但读不出登录结论，这是「没测出来」而不是「不可用」。
+        return unknownRuntimeStatus("claude auth status 的输出无法解析，暂时无法确认登录状态。");
       }
-      return {
-        available: true,
-        authenticated: parsed?.loggedIn === true,
-        detail: parsed?.loggedIn === true
-          ? ""
-          : "Claude Code CLI 未登录，请在终端运行 claude auth login",
-      };
+      if (parsed?.loggedIn !== true) {
+        return {
+          status: "needs_auth",
+          transports: [],
+          reasonCode: "CLAUDE_AUTH_REQUIRED",
+          statusMessage: "Claude Code CLI 未登录。",
+          action: {
+            kind: "terminal-command",
+            label: "复制登录命令",
+            message: "在终端里运行它完成登录；看板不会代你执行终端命令。",
+            autoRunnable: false,
+            command: `${executable} auth login`,
+          },
+        };
+      }
+      // 目录在不等于能发现：Claude 只扫 ~/.claude/skills（§7）。
+      if (!(await isSkillDiscoverable({ skillsRoot: path.join(claudeHome, "skills") }))) {
+        return {
+          status: "needs_setup",
+          transports: [],
+          reasonCode: "SKILL_LINK_CONFLICT",
+          statusMessage: `${definition.label} 发现不到 manage-taskboard skill，`
+            + `${path.join(claudeHome, "skills", "manage-taskboard")} 不存在或没有指向已安装的 skill。`,
+          action: {
+            kind: "internal-route",
+            label: "查看 skill 状态",
+            message: "打开看板里的 skill 页面，确认共享 skill 的安装与软链情况。",
+            autoRunnable: true,
+            route: "/settings/skills/manage-taskboard",
+          },
+        };
+      }
+      return { status: "ready", transports: ["headless"] };
     },
 
     async catalog(projectId) {

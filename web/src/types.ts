@@ -13,8 +13,53 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type ActorType = "user" | "agent";
 import type { AgentKind, AssigneeTarget } from "../../shared/agents.mjs";
+import type {
+  AGENT_RUNTIME_REASON_CODES,
+  AGENT_RUNTIME_STATUSES,
+  AGENT_TRANSPORTS,
+  RUNTIME_SETUP_APP_ACTION_IDS,
+} from "../../shared/agent-runtime.mjs";
 
 export type { AgentKind, AssigneeTarget };
+
+// 全部从 shared/agent-runtime.mjs 的常量推导，Web 侧不再各自维护字符串。
+export type AgentTransport = (typeof AGENT_TRANSPORTS)[number];
+export type AgentRuntimeState = (typeof AGENT_RUNTIME_STATUSES)[number];
+export type AgentRuntimeReasonCode = (typeof AGENT_RUNTIME_REASON_CODES)[number];
+export type RuntimeSetupAppActionId = (typeof RUNTIME_SETUP_APP_ACTION_IDS)[number];
+
+export type RuntimeSetupAction =
+  | { kind: "terminal-command"; label: string; message: string; autoRunnable: false; command: string }
+  | { kind: "deep-link"; label: string; message: string; autoRunnable: true; url: string }
+  | {
+      kind: "app-action";
+      label: string;
+      message: string;
+      autoRunnable: true;
+      actionId: RuntimeSetupAppActionId;
+    }
+  | { kind: "internal-route"; label: string; message: string; autoRunnable: true; route: string }
+  | { kind: "external-url"; label: string; message: string; autoRunnable: true; url: string }
+  | { kind: "message"; label: string; message: string; autoRunnable: false };
+
+export interface AgentRuntimeStatus {
+  kind: AgentKind;
+  status: AgentRuntimeState;
+  transports: AgentTransport[];
+  version?: string;
+  reasonCode?: AgentRuntimeReasonCode;
+  /** 为什么处于当前状态；动作说明是「执行它会发生什么」，两者不互换。 */
+  statusMessage?: string;
+  action?: RuntimeSetupAction;
+  checkedAt: string;
+  /** 这次没测出来、沿用了上次结果。 */
+  stale: boolean;
+}
+
+export interface AgentRuntimeSnapshot {
+  defaultAgentKind: AgentKind;
+  agents: AgentRuntimeStatus[];
+}
 export type IssueRelationType = "parent" | "blocks" | "blocked_by" | "related";
 
 export interface AgentSession {

@@ -1,4 +1,5 @@
 import { existingDirectory, loadDeviceWorkspaces } from "../ai-chat-catalog.mjs";
+import { workspaceKey } from "../../shared/workspace-key.mjs";
 
 /**
  * Where each project is checked out on this device, for any agent.
@@ -13,7 +14,7 @@ import { existingDirectory, loadDeviceWorkspaces } from "../ai-chat-catalog.mjs"
  * uses, so every agent may read it; without Codex installed it is simply absent.
  */
 export function createDeviceWorkspaces({ codexStatePath, database, readProjectMappings }) {
-  return async function deviceWorkspaces() {
+  async function deviceWorkspaces() {
     const workspaces = await loadDeviceWorkspaces(codexStatePath, database);
     const mappings = (await readProjectMappings?.()) ?? {};
     for (const [projectId, mappedPath] of Object.entries(mappings)) {
@@ -21,5 +22,22 @@ export function createDeviceWorkspaces({ codexStatePath, database, readProjectMa
       if (workspacePath) workspaces.set(projectId, workspacePath);
     }
     return workspaces;
+  }
+
+  /**
+   * 反向索引：规范化后的工作目录 → 指向它的项目 id。同一个目录被两个项目引用时
+   * 它们共用一份 Codex 项目，而不是在 Codex 侧建出两个（§9、§12）。
+   * 键必须规范化——大小写与 NFD/NFC 差异会让同一目录被判成两个。
+   */
+  deviceWorkspaces.byWorkspaceKey = async () => {
+    const index = new Map();
+    for (const [projectId, workspacePath] of await deviceWorkspaces()) {
+      const key = workspaceKey(workspacePath);
+      if (!index.has(key)) index.set(key, { workspacePath, projectIds: [] });
+      index.get(key).projectIds.push(projectId);
+    }
+    return index;
   };
+
+  return deviceWorkspaces;
 }

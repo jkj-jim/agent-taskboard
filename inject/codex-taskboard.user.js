@@ -42,6 +42,10 @@
   const PROJECT_SECTION_LABELS = ["projects", "项目"];
   const TASK_SECTION_LABELS = ["tasks", "任务", "chats", "对话"];
 
+  // 安装版只加载 automation bridge：不创建 Taskboard 入口按钮，也不挂 iframe（§3、§9）。
+  // 开发命令加载 panel 入口时才置为 true。
+  const PANEL_ENABLED = window.__CODEX_TASKBOARD_PANEL_ENABLED__ === true;
+
   const previous = window[SENTINEL_KEY];
   if (previous?.sourceHash === SOURCE_HASH && typeof previous.refresh === "function") {
     previous.refresh();
@@ -221,11 +225,11 @@
     const scroll = document.querySelector("[data-app-action-sidebar-scroll]");
     if (!scroll) return null;
     const buttons = Array.from(scroll.querySelectorAll("button"));
+    // 标签精确命中「插件」本身就是足够强的信号。原来还要求它的父元素至少有 3 个
+    // 兄弟按钮，用来确认落在导航组里；Codex 151 改成了每个按钮各自包一层 div，
+    // 这个条件永远不成立，入口从此挂不上。命中即用，兄弟数只作为兜底顺序的依据。
     const plugin = buttons.find((button) => buttonMatches(button, PLUGIN_LABELS));
-    if (plugin && plugin.parentElement) {
-      const siblings = Array.from(plugin.parentElement.children).filter((child) => child.tagName === "BUTTON");
-      if (siblings.length >= 3) return plugin;
-    }
+    if (plugin) return plugin;
 
     const firstSection = scroll.querySelector("[data-app-action-sidebar-section]");
     const sectionTop = firstSection?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY;
@@ -288,6 +292,7 @@
   }
 
   function ensureEntry() {
+    if (!PANEL_ENABLED) return;
     if (destroyed || !document.body) return;
     installStyles();
     const reference = findReferenceButton();
@@ -1177,6 +1182,7 @@
   }
 
   function mountActivePage() {
+    if (!PANEL_ENABLED) return;
     if (!active) return;
     if (!page) page = createPage();
     const mount = findPageMount();

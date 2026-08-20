@@ -57,6 +57,59 @@ export function workbuddyTaskDeeplink({ instruction, workspacePath, skillName })
 
 const openWithDesktop = promisify(execFile);
 
+/**
+ * 把用户送到 MCP 服务管理面板前（document/design/desktop-app-packaging.md §11）。
+ *
+ * 路径是 `更多操作 → 连接器 → 管理连接器 → 自定义连接器`，四步都必须用真实鼠标事件：
+ * 合成的 `element.click()` 打不开这套菜单。几个反直觉的点都是实测踩出来的——
+ *   · 「更多操作」是图标按钮，`textContent` 为空，只能按 `aria-label` 找；
+ *   · 菜单是 toggle，无条件点会把已经打开的菜单关掉，所以每步先看目标是否已可见；
+ *   · 菜单行的文本节点 class 是 `_itemLabel_*`，按 `[class*="item"]` 向上找会停在它身上，
+ *     必须排除 `*Label*` 才能拿到真正的行元素；
+ *   · 「连接器」是二级菜单父项（`aria-haspopup`），点开后才出现「管理连接器」。
+ *
+ * 最后那一下「信任」不点：授权是用户的决定，看板只负责把界面送到他面前。
+ */
+export const MCP_TRUST_BUTTON_SELECTOR = ".mcp-item-approval-btn";
+
+const MCP_PANEL_STEPS = ["连接器", "管理连接器", "自定义连接器"];
+
+export async function revealMcpApproval(cdp, { evaluate, clickPoint, pause }) {
+  const locate = (label) => evaluate(cdp, `(() => {
+    const n = (v) => String(v || "").replace(/\\s+/g, " ").trim();
+    const byLabel = Array.from(document.querySelectorAll('button,[role="button"]'))
+      .find((el) => n(el.getAttribute("aria-label")) === ${"${JSON.stringify(label)}"} && el.getClientRects().length > 0);
+    const leaf = byLabel ?? Array.from(document.querySelectorAll("*"))
+      .find((el) => n(el.textContent) === ${"${JSON.stringify(label)}"}
+        && el.children.length === 0 && el.getClientRects().length > 0);
+    if (!leaf) return null;
+    let el = leaf;
+    while (el.parentElement && el.tagName !== "BUTTON") {
+      const cls = String(el.className || "");
+      if (el.getAttribute("role") === "menuitem" || (/_item_/.test(cls) && !/Label/i.test(cls))) break;
+      el = el.parentElement;
+    }
+    const rect = el.getBoundingClientRect();
+    return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+  })()`);
+
+  const trustVisible = () => evaluate(cdp, `Boolean(document.querySelector(${"${JSON.stringify(MCP_TRUST_BUTTON_SELECTOR)}"}))`);
+  if (await trustVisible()) return true;
+
+  const trigger = await locate("更多操作");
+  if (!trigger) return false;
+  await clickPoint(cdp, trigger.x, trigger.y);
+  await pause(1_200);
+
+  for (const label of MCP_PANEL_STEPS) {
+    const target = await locate(label);
+    if (!target) return false;
+    await clickPoint(cdp, target.x, target.y);
+    await pause(label === "自定义连接器" ? 2_400 : 1_400);
+  }
+  return trustVisible();
+}
+
 export function workbuddyDebuggingPorts(preferredPort = DEFAULT_WORKBUDDY_DEBUGGING_PORT) {
   // The port arrives through WORKBUDDY_REMOTE_DEBUGGING_PORT, so it never shows
   // up in the process arguments the way Codex's does. Only the agreed port and
@@ -305,11 +358,17 @@ export function createWorkbuddyDesktopController(options = {}) {
         if (submitted.pendingConnectorAuth) {
           // Waiting out the timeout here would report "nothing was sent", which
           // says nothing about the dialog holding it back.
+          // 先把 MCP 服务管理面板打开，用户回到 WorkBuddy 就能直接点「信任」，
+          // 不用自己在菜单里翻四层（§11）。导航失败不影响这条错误的准确性。
+          const revealed = await revealMcpApproval(cdp, { evaluate, clickPoint, pause })
+            .catch(() => false);
           throw new ApiError(
             409,
             "WORKBUDDY_CONNECTOR_UNAUTHORIZED",
-            "WorkBuddy 正在等待连接器授权，任务发不出去。"
-            + "请在它的弹窗中选择「去连接」完成授权，或选择「忽略」后重试。",
+            revealed
+              ? "WorkBuddy 正在等待连接器授权，任务发不出去。已为你打开 MCP 服务管理面板，点其中的「信任」完成授权后重试。"
+              : "WorkBuddy 正在等待连接器授权，任务发不出去。"
+                + "请在「更多操作 → 连接器 → 管理连接器 → 自定义连接器」里点「信任」完成授权后重试。",
           );
         }
         await pause(settleMs);

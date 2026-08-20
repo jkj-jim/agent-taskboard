@@ -1,0 +1,102 @@
+name: macOS verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # 一期最低系统是 macOS 14，验证机型固定写死；用 macos-latest 会在 runner 升级后
+    # 悄悄失去最低版本覆盖（document/design/desktop-app-packaging.md §18）。
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: server / shared / cli 只依赖 Node 内置模块
+        run: |
+          bare=$(grep -rhoE '(from|import) "[^"./][^"]*"' server shared cli \
+            | sed -E 's/^(from|import) "//; s/"$//' \
+            | grep -v '^node:' | sort -u || true)
+          if [ -n "$bare" ]; then
+            echo "server/shared/cli 引入了第三方运行时依赖：$bare"
+            exit 1
+          fi
+
+      - name: App 版本单一来源一致
+        run: node scripts/sync-app-version.mjs --check
+
+      - name: 下载并校验随包 Node 二进制
+        run: npm run sidecar:node
+
+      - name: 随包 Node 上跑完整测试
+        run: ./src-tauri/binaries/node-aarch64-apple-darwin --test
+
+      - name: sidecar 直接路径（node:sqlite / health / shim / 优雅退出）
+        run: node scripts/verify-sidecar-runtime.mjs
+
+      - name: 前端静态产物
+        run: npm run build:web
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-macos-14-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: cargo-macos-14-
+
+      - name: Tauri 侧 profile 推导单元测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: 打包 macOS arm64 产物
+        run: npx tauri build --bundles app
+
+      - name: 校验产物身份与最低系统版本
+        run: |
+          app="src-tauri/target/release/bundle/macos/Agent Taskboard.app"
+          plist="$app/Contents/Info.plist"
+          minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist")
+          identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist")
+          [ "$minimum" = "14.0" ] || { echo "LSMinimumSystemVersion=$minimum，期望 14.0"; exit 1; }
+          [ "$identifier" = "io.github.jkj-jim.agenttaskboard" ] || {
+            echo "CFBundleIdentifier=$identifier"; exit 1;
+          }
+          bundled=$("$app/Contents/MacOS/node" --version)
+          pinned="v$(tr -d '[:space:]' < .nvmrc)"
+          [ "$bundled" = "$pinned" ] || { echo "随包 Node 是 $bundled，.nvmrc 是 $pinned"; exit 1; }
+          for resource in server shared cli skills dist/web; do
+            [ -e "$app/Contents/Resources/$resource" ] || {
+              echo "产物缺少资源：$resource"; exit 1;
+            }
+          done
+
+      - name: 校验 ad-hoc 签名封存与随包 node entitlements
+        # 默认路线就是 ad-hoc 自签（tauri.conf.json 的 signingIdentity "-"）。
+        # 打包时 tauri 会用这个身份重签 Contents/MacOS/node，重签会丢掉 Node 官方
+        # 二进制自带的 hardened runtime 例外——缺了 allow-jit 的 node 一启动就
+        # SIGTRAP，sidecar 静默起不来，App 只剩一个空窗口。
+        run: |
+          app="src-tauri/target/release/bundle/macos/Agent Taskboard.app"
+          [ -f "$app/Contents/_CodeSignature/CodeResources" ] || {
+            echo "缺少 _CodeSignature/CodeResources，资源没有被封存"; exit 1;
+          }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          entitlements=$(codesign -d --entitlements - --xml "$app/Contents/MacOS/node" 2>/dev/null)
+          for key in allow-jit allow-unsigned-executable-memory; do
+            case "$entitlements" in
+              *"com.apple.security.cs.$key"*) ;;
+              *) echo "随包 node 签名后缺少 $key，V8 会 SIGTRAP"; exit 1 ;;
+            esac
+          done
+          "$app/Contents/MacOS/node" -e 'require("node:sqlite"); console.log("bundled node ok")'

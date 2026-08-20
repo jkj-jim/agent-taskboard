@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"启动故障页需要监听 startup 事件并调用 retry_startup","local":true,"windows":["main"],"permissions":["core:default"]}}

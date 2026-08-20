@@ -39,7 +39,9 @@ test("embedded page uses the local taskboard URL and supports a runtime override
 
 test("entry clones the native Plugins row and the page covers the complete Codex workspace", () => {
   assert.match(source, /const PLUGIN_LABELS = \["插件", "plugins"\]/);
-  assert.match(source, /if \(siblings\.length >= 3\) return plugin;/);
+  // Codex 151 起每个按钮各自包一层 div，原来的「父元素至少 3 个兄弟按钮」
+  // 永远不成立，入口挂不上；标签精确命中即采用。
+  assert.match(source, /const plugin = buttons\.find\(\(button\) => buttonMatches\(button, PLUGIN_LABELS\)\);\s*\n\s*if \(plugin\) return plugin;/);
   assert.match(source, /return directButtons\.length >= 3/);
   assert.match(source, /const button = reference\.cloneNode\(true\)/);
   assert.match(source, /reference\.after\(entry\)/);
@@ -260,7 +262,9 @@ test("native Codex launches leave manual prompts editable and only auto-submit b
     desktopController,
     /success = true;\s*try \{\s*await restoreView\(cdp, previousProjectId, snapshot\.activeThreadId\);\s*\} catch \{\}/,
   );
-  assert.match(webApp, /launchNativeCodexTask\([\s\S]*?"status-transition"[\s\S]*?"background"/);
+  // 状态迁移的原生启动已由服务端在同一次业务请求里完成，前端不再自己调这条路由；
+  // 只有手动「在对话中打开」还留在客户端（§8）。
+  assert.doesNotMatch(webApp, /launchNativeCodexTask\([\s\S]*?"status-transition"/);
   assert.match(webApp, /launchNativeCodexTask\([\s\S]*?"manual"[\s\S]*?"foreground"/);
   assert.doesNotMatch(webApp, /type: "taskboard:create-thread"/);
   assert.match(webApp, /type: "taskboard:open-thread", payload: \{ threadId \}/);

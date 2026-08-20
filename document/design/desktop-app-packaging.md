@@ -154,12 +154,13 @@ src-tauri/
 
 运行时约束：
 
-- 安装版始终使用 App 内携带的 Node，不探测、不下载、也不调用用户系统 Node；
+- 安装版始终使用 App 内携带的 Node，不探测、不下载、也不调用用户系统 Node。依据是 Finder 启动的 App 只拿到 launchd 默认 `PATH`（`/usr/bin:/bin:/usr/sbin:/sbin`），nvm、homebrew、fnm、volta 装的 Node 都不在其中；即便找到，用户随时可以把当前版本切成任意一个，而 `node:sqlite` 在 22 / 23 / 24 之间存在 API 差异，等于在每台用户机器上跑未验证的组合。随包代价是二进制 108 MB、DMG 压缩后 38 MB，用户端零配置；包体优化留给 §4 提到的 Node SEA 实验；
 - `server/`、`shared/`、`cli/` 不得引入第三方运行时 npm 依赖；前端 npm 包只进入构建后的静态资源；
 - `.nvmrc` 是 Node 版本单一来源，固定为 `22.23.2`；sidecar 下载脚本和 GitHub Actions 从该文件读取版本；
-- `package.json#engines.node` 收窄为 `>=22.16 <23`，开发、测试和打包 CI 均在 `.nvmrc` 版本执行；
+- `package.json#engines.node` 为 `>=22.16`，下界来自 `sqlite.backup()`，不设上界：开发机可以用更新的 Node，兼容性由 CI 在 `.nvmrc` 固定版本的随包二进制上跑完整测试保证，这比限制开发机版本更硬；
 - 下载 `node-v22.23.2-darwin-arm64.tar.gz` 后校验 Node 官方 `SHASUMS256.txt`，校验通过才进入签名产物；
 - P0 使用 GitHub Actions `macos-14` arm64 runner，用该二进制直接运行 `npm test`、`node:sqlite` 和 sidecar 启动测试；
+- `node:sqlite` 在 `22.23.2` 上会向 stderr 打印 ExperimentalWarning，日志管道不得据此判定 sidecar 启动失败；
 - Node SEA 只保留为后续包体优化实验，一期使用“Node 二进制 + `.mjs` 源码”，不把 SEA 放入交付关键路径。
 
 App 版本来源：
@@ -167,7 +168,7 @@ App 版本来源：
 - `package.json#version` 是唯一人工维护的完整 SemVer 来源，release tag 必须与其完全一致，包括 pre-release 标记；
 - 新增 `scripts/sync-app-version.mjs`：校验完整 SemVer，并从同一个值同步 `tauri.conf.json`，生成 `src-tauri/src/app_version_generated.rs` 和 `shared/app-version.generated.mjs`；CI 的 `--check` 模式在任一目标与 `package.json#version` 不一致时失败；
 - Tauri 只使用生成的 Rust 常量 `APP_VERSION_FULL` 做 profile 推导和版本比较；sidecar 只使用生成的 ESM 常量 `APP_VERSION_FULL` 做启动握手和 `/health.version`；两端要求字符串完全相同；延后的迁移安全网也只能读这两个常量；
-- 运行时不得从 `Info.plist`、文件名、Git tag、updater 响应或 `package.json` 现读版本；`CFBundleShortVersionString` 即使被打包工具规范化，也不参与安全判断；
+- 运行时不得从 `Info.plist`、文件名、Git tag、updater 响应或 `package.json` 现读版本；`CFBundleShortVersionString` 即使被打包工具规范化，也不参与安全判断。实测 Tauri `2.11.4` 会把 `2.1.0-beta.1` 原样写入 `CFBundleShortVersionString` 与 `CFBundleVersion`，但该保留行为由第三方工具链决定，仍不作为判断依据；
 - `/health.version`、启动日志和后续版本状态文件统一保存完整 SemVer；例如 `2.1.0-beta.1` 与 `2.1.0-beta.2` 必须保持可区分。
 
 Tauri 启动 sidecar 时传入：
@@ -212,12 +213,14 @@ sidecar 参数落点：
 
 生命周期：
 
-- 以 `{bundleIdentifier}:{profile}` 作为单实例键；同一 profile 只运行一个 App 实例，production、beta 和开发服务不互相前置窗口；
+- 以 `{bundleIdentifier}:{profile}` 作为单实例键；同一 profile 只运行一个 App 实例，production、beta 和开发服务不互相前置窗口。通道是 TMPDIR 下按 profile 命名的 Unix socket——App Data 里的 profile 目录已接近 macOS `sun_path` 的 104 字节上限，放不下；异常退出留下的死 socket 由下次启动连接失败后接管；
 - `/health` 返回 `{ status, appId, profile, version, pid, instanceId }`，确认 `appId`、期望 profile 和版本均匹配后才加载主窗口；
 - production 固定使用 47824，beta 固定使用 47825；端口被同 profile 实例占用时由单实例通道前置已有窗口，被其他进程或其他 profile 占用时停止启动且不改用随机端口；只有 `/health` 能识别身份时才显示占用者信息，否则只提示对应端口冲突；
+- 关闭主窗口只隐藏窗口，App 保留在程序坞，点击 Dock 图标重新显示；只有 `Cmd+Q` 或系统退出才停止 sidecar。依据是自动触发和 `presentation: "background"` 的 Agent 任务需要 App 常驻，Tauri 默认的「关最后一个窗口即退出」会连带中断它们；
 - sidecar 异常退出最多重启 2 次；
 - 连续失败时显示启动故障页：失败原因、日志路径和重试按钮；该页只处理启动问题，不涉及数据库恢复；
-- App 退出前通知 sidecar 优雅关闭 SQLite；
+- App 退出前向 sidecar 发 SIGTERM 并等它自行收尾，超时才强杀；正常退出会把 WAL 归并回主库并删除 `-wal` / `-shm`，可用它判断是否干净关闭；
+- Tauri 的退出事件只在 macOS 正常退出路径触发；壳被 SIGTERM、SIGKILL 或崩溃带走时不会触发，sidecar 会变成孤儿并继续占用端口和 SQLite。所以安装版 sidecar 自己每 2 秒检查 `process.ppid`，父进程消失即走同一条 `close()` 收尾并退出；
 - 更新前停止 sidecar，更新后只复用当前 profile 的 App Data。
 
 一期安全边界：
@@ -235,7 +238,7 @@ sidecar 参数落点：
 ~/Library/Application Support/io.github.jkj-jim.agenttaskboard/
   profiles/
     production/
-      data/taskboard.sqlite
+      taskboard.sqlite
       attachments/
       bin/taskctl
       logs/
@@ -243,7 +246,7 @@ sidecar 参数落点：
       skill-templates/<app-version>/
       runtime/
     beta/
-      data/taskboard.sqlite
+      taskboard.sqlite
       attachments/
       bin/taskctl
       logs/
@@ -251,6 +254,8 @@ sidecar 参数落点：
       skill-templates/<app-version>/
       runtime/
 ```
+
+`--data-directory` 指向 profile 根目录，数据库和 `bin/taskctl` 都由它派生；`attachments/` 与 `runtime/` 另由各自参数显式传入。
 
 `runtime/` 保存当前启动的易失状态，一期只有 Codex CDP 端口。数据库备份目录和版本状态文件属于延后的迁移安全网，一期不创建。
 
@@ -272,6 +277,8 @@ sidecar 参数落点：
 - production 和 beta 不读取、复制、迁移或合并对方的数据；beta 首次启动使用空数据目录；两者均不读取或写入仓库 `.data`；
 - 每个实例生成包含自身 origin 的 shim；
 - 提示词携带当前实例的绝对 shim，不依赖全局 `taskctl`；
+- Codex 登录态与账号数据不在隔离范围内：三套实例共用全局 `CODEX_HOME`（默认 `~/.codex`），只有 Electron profile 目录和 CDP 端口按实例隔离；
+- CDP 端口从当前 profile 的专用范围动态选择，启动前确认 IPv4 与 IPv6 loopback 都空闲；Chromium 在 IPv4 被占用时会退回 `[::1]`，连接后必须先确认目标是 Codex 主渲染进程，不能只凭端口可达就认定连上的是 Codex；
 - CDP 端口只写入当前 runtime，不进入共享 skill；
 - 安装版的 profile 级单实例不阻止开发服务或另一个 profile 运行；
 - 三个实例不自动同步或合并任务数据；
@@ -513,7 +520,8 @@ discover ChatGPT/Codex App
 
 实现要求：
 
-- 自动启动使用当前 Taskboard profile App Data 下独立的 Codex automation profile；production 与 beta 不共享登录态或 CDP 数据；
+- 自动启动使用当前 Taskboard profile App Data 下独立的 Codex automation profile；production 与 beta 不共享 CDP 与浏览器级数据；
+- Codex 登录态、项目和会话保存在全局 `CODEX_HOME`（默认 `~/.codex`），不随 automation profile 隔离；App 不得为某个 profile 覆盖 `CODEX_HOME`，否则隔离实例会退回登录页；
 - automation profile 跨 App 重启保留，不为每次任务创建临时 profile；
 - 不关闭或修改用户已经打开的普通 Codex 窗口；
 - CDP 只监听 loopback；
@@ -525,12 +533,13 @@ discover ChatGPT/Codex App
 - native-submit 成功必须同时满足：获得 canonical session ID、标题正确、对应项目侧栏可见；
 - DOM 或 bridge 不兼容时返回 `needs_setup`，不伪装为原生成功。
 
-P0 第一验收门：
+P0 第一验收门（已通过，见任务 `7627EC6179C0-67`）：
 
-- 先验证独立 profile 是否能复用 Codex 现有登录态，再继续 Tauri 壳实现；
-- 若不能复用，一期兜底固定为“首次使用时在隔离的 Codex 窗口完成一次登录”，登录后的 profile 持久保存在当前 Taskboard profile App Data；production 与 beta 分别完成自己的首次登录；
-- 不附着或改造用户普通 Codex 实例，因为普通实例通常没有启用所需 CDP 参数；
+结论是独立 automation profile 直接复用现有登录态，一期不需要登录引导。ChatGPT.app `151.0.7922.137` 上，全新 `--user-data-dir` 启动即进入已登录界面并带出账号下的项目与会话；把 `CODEX_HOME` 指向空目录后同一 profile 退回登录页，可见凭据只来自 `CODEX_HOME`。`scripts/verify-codex-profile-login.mjs` 是可复跑的验收脚本，Codex 升级后重跑确认结论仍成立。
+
+- 不附着或改造用户普通 Codex 实例，因为普通实例通常没有启用所需 CDP 参数；实测隔离实例与用户正常窗口可同时运行，互不影响；
 - 不以 CLI headless 代替此链路，因为一期验收要求 session 出现在 Codex 对应项目侧栏；
+- 若未来 Codex 改为按 profile 存放凭据，兜底固定为“首次使用时在隔离的 Codex 窗口完成一次登录”，登录后的 profile 持久保存在当前 Taskboard profile App Data，production 与 beta 分别完成各自的首次登录；
 - 登录、账号授权和验证码不可自动填写，应用只负责打开正确窗口、检测登录完成并继续原流程。
 
 ## 10. 任务提示词
@@ -630,11 +639,39 @@ document/design/agent-taskboard-app-icon.svg
 ```text
 push app-v* tag
 -> GitHub Actions macOS arm64 build
--> codesign and notarize
+-> codesign（ad-hoc 或 Developer ID；后者额外 notarize + staple）
 -> generate updater artifact and .sig
 -> stable tag: generate latest.json and upload all artifacts
 -> beta tag: upload manual-download artifacts without latest.json
 ```
+
+### 两把互不相关的密钥
+
+| | updater 签名密钥 | Apple Developer ID |
+| --- | --- | --- |
+| 生成方式 | `npx tauri signer generate`（minisign/ed25519） | Apple Developer Program |
+| 费用 | 免费 | $99/年 |
+| 作用 | 证明自动更新下载到的包确实来自本仓库 | 让 Gatekeeper 放行首次打开 |
+| 缺了会怎样 | 自动更新无法启用 | 首次打开需用户手动放行一次 |
+
+前者是自动更新的必需品，与 Apple 无关；后者只影响首次打开的体验。两者不可互相替代。
+
+### 签名路线
+
+CI 按 secrets 里有没有 `APPLE_SIGNING_IDENTITY` 自动选择，无需改配置：
+
+- **ad-hoc（默认，零成本）**：`tauri.conf.json` 的 `bundle.macOS.signingIdentity = "-"`。Tauri 由内而外自签 `Contents/MacOS/node` → 主程序 → bundle，资源被正常封存。不公证，`spctl` 必然 rejected，用户首次打开要手动放行一次（macOS 14 用 Control+点击「打开」，macOS 15 起改为「系统设置 → 隐私与安全性 → 仍要打开」）。放行后 quarantine 被清除，之后的自动更新由 App 自己下载写入、不带 quarantine，不会再提示。
+- **developer-id（可选）**：secrets 配齐后同一条 workflow 额外做公证与 staple，用户双击即开。
+
+不写 `signingIdentity` 不是「不签名」而是更差的一档：产物只有链接器给的 ad-hoc 签名，`Info.plist` 未绑定、资源未封存，`codesign --verify --deep --strict` 报 `code has no resources but signature indicates they must be present`，bundle identifier 也退化成链接器生成的随机串。
+
+### 随包 Node 的 entitlements
+
+打包时 Tauri 会用本项目的身份重签 `Contents/MacOS/node`，**重签会丢掉 Node 官方二进制自带的 hardened runtime 例外**。缺了 `com.apple.security.cs.allow-jit` 与 `allow-unsigned-executable-memory`，V8 无法申请可执行内存，node 一启动就 `EXC_BREAKPOINT / SIGTRAP`，sidecar 静默起不来，用户只看到一个连不上的空窗口。
+
+`src-tauri/entitlements.plist` 只补这两条。Node 官方还带 `allow-dyld-environment-variables`、`disable-executable-page-protection`、`disable-library-validation`（本项目不加载原生插件、不注入 dyld 变量，用不到）和 `get-task-allow`（会让 Developer ID 产物在公证时被拒，一律不加）。
+
+两条 workflow 都在打包后读一次 entitlements 并**真的执行一次随包 node**——只读 entitlements 不够，跑起来才算数。
 
 实现要求：
 
@@ -654,7 +691,7 @@ push app-v* tag
 - 只有非 pre-release 的 `app-vX.Y.Z` stable release 才上传并覆盖 `releases/latest/download/latest.json`；
 - `app-vX.Y.Z-beta.N` 只发布手动下载产物，不得覆盖或读取 stable `latest.json`；beta build 固定使用 `beta` profile、47825 和 `profiles/beta`，不得访问 production 数据；若未来提供测试通道，使用独立 endpoint 和独立用户开关；
 - release tag 和已发布版本不可覆盖复用；任何改变数据库结构或做不可逆数据转换的代码修改都必须提升完整 App SemVer，CI 拒绝以已有版本重新发布不同产物；
-- GitHub Actions 必须先通过签名、公证和 Gatekeeper 验证，再创建或更新 Release；任一步失败都不得发布 `latest.json`；
+- GitHub Actions 必须先通过签名封存自检（`_CodeSignature/CodeResources` 存在、`codesign --verify --deep --strict` 通过、随包 node 带 JIT entitlements 且能真正执行），再创建或更新 Release；走 developer-id 路线时还要额外通过公证与 Gatekeeper 验证；任一步失败都不得发布 `latest.json`；
 - 更新下载或安装失败时继续运行当前版本并保留错误日志；若新版本安装后无法通过启动健康检查，启动故障页展示失败原因、日志路径、重试按钮，以及当前 profile 对应的 GitHub Releases 手动下载入口（production 指向 stable release 列表，beta 指向 beta release 列表）；不得让 stable 二进制打开 beta profile；
 
 数据库迁移（一期范围）：
@@ -671,7 +708,7 @@ push app-v* tag
 
 ### P0：macOS 技术验证
 
-- 第一项先验证 Codex 独立 automation profile 的登录态；不能复用时验收一次性登录引导和 profile 持久化；
+- 第一项 Codex 独立 automation profile 登录态已验证可复用，结论见 §9；
 - 使用 GitHub Actions `macos-14` arm64 runner 作为最低系统验证机，workflow 固定写 `runs-on: macos-14`，不使用 `macos-latest`；
 - Tauri arm64 启动 bundled Node `22.23.2`；
 - 验证 `node:sqlite`、`/health`、shim 和优雅退出；
@@ -680,11 +717,13 @@ push app-v* tag
 - 从新建 Taskboard 项目创建一个 Codex project 和原生 session；
 - 验证 session 标题、项目归属和 canonical ID。
 
+Tauri 壳、随包 Node、`node:sqlite`、`/health`、taskctl shim 与优雅退出已验证通过（任务 `7627EC6179C0-68`）；可复跑入口是 `scripts/verify-sidecar-runtime.mjs` 与 `.github/workflows/macos-verify.yml`。Codex 原生 session 相关项随 P3 落地。
+
 P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打包。
 
 ### P1：Tauri 壳与数据目录
 
-- 第一步创建 `.nvmrc` 并将开发机、`package.json#engines.node`、测试 CI 切到 Node `22.23.2`；切换完成前不开始 sidecar 打包；
+- `.nvmrc` 与 CI 已固定在 Node `22.23.2`，`engines.node` 只保留 `>=22.16` 下界（随任务 68 完成）；
 - 建立 `package.json#version` 到 Tauri Rust、sidecar ESM 和 `tauri.conf.json` 的完整 SemVer 生成与一致性检查；
 - 建立 `src-tauri`；
 - 为 `server/index.mjs` 增加十个 sidecar CLI 参数解析，并将参数落到 `resolveServerOptions()` / `app.listen()`；
@@ -725,10 +764,10 @@ P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打
 
 - 生成图标和 arm64 安装产物；
 - 配置 GitHub Actions；
-- 完成签名和公证；
+- 完成 ad-hoc 签名；配齐 Apple 凭据后再完成公证；
 - 接入 GitHub Releases updater；
 - 在干净 macOS 用户环境验证安装、升级和卸载；
-- 演练公证失败、Gatekeeper 拦截和更新下载失败；
+- 演练 Gatekeeper 拦截与首次放行、更新下载失败；配齐 Apple 凭据后补公证失败演练；
 - 安装 beta 并写入数据，再重装 stable，验证 production 数据、附件和 `agent-taskboard` MCP 条目未被 beta 修改；beta 只新增或更新自己的 `agent-taskboard-beta` 条目；
 - 记录共享 skill 和 Claude 软链状态后启动 beta、查看模板差异并执行所有可见 setup action，验证内容 checksum、`.taskboard-skill.json` 和软链均不变化；
 - 将 `2.1.0-beta.1` 完成打包、签名和公证后启动，验证 Tauri 编译期常量与 `/health.version` 完整保留 `2.1.0-beta.1`；再以 `2.1.0-beta.2` 验证两者不会被判为同一版本；
@@ -783,7 +822,7 @@ P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打
 - [ ] Codex 不显示 Taskboard 面板也能创建并提交原生 session；
 - [ ] Codex session 出现在 workspace 对应项目侧栏；
 - [ ] 普通 Codex 窗口和已有 session 不被关闭或改写；
-- [ ] Codex 隔离 profile 无法复用登录态时，每个 Taskboard profile 只需完成一次登录，重启 App 后不重复；
+- [ ] Codex 隔离 automation profile 复用用户现有登录态，首次使用无需登录；若 Codex 改为按 profile 存放凭据，每个 Taskboard profile 只需完成一次登录且重启 App 后不重复；
 - [ ] Claude headless 可执行并回写 Taskboard；
 - [ ] WorkBuddy 不要求用户手动填写连接配置；
 - [ ] 同一状态变化不会创建两个 session；
@@ -805,8 +844,9 @@ P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打
 ### 分发与更新
 
 - [ ] App 使用正式产品名、bundle identifier 和图标；
-- [ ] macOS 产物完成签名和公证；
-- [ ] 未签名、公证失败或 Gatekeeper 验证失败时，CI 不发布 stable 更新元数据；
+- [ ] macOS 产物完成 ad-hoc 签名、资源正常封存，随包 node 保留 JIT entitlements 且能执行；配齐 Apple 凭据后额外完成公证与 staple；
+- [ ] 签名封存自检失败、随包 node 跑不起来、公证失败或 Gatekeeper 验证失败时，CI 不发布 stable 更新元数据；
+- [ ] ad-hoc 路线的 Release 说明写明首次打开的放行步骤，并区分 macOS 14 与 15+；
 - [ ] stable GitHub Release 包含 DMG、更新产物、签名和有效 `latest.json`；beta Release 不包含 `latest.json`；
 - [ ] pre-release 不覆盖或读取 stable `latest.json`，也不读取、迁移或改写 production profile 数据；
 - [ ] production 可从上一 stable 版本完成签名校验后的自动升级；
@@ -821,7 +861,7 @@ P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打
 | --- | --- |
 | 一期平台 | 仅 macOS 14+ Apple Silicon；Intel 与 Windows 后移 |
 | 最低系统验证 | 使用固定的 GitHub Actions `macos-14` arm64 runner；该 runner 不可用时，必须提供 macOS 14 self-hosted runner 或重新提高最低版本，不声明未验证兼容性 |
-| Node runtime | App 内置 Node.js `22.23.2` arm64；不使用或下载用户系统 Node；`.nvmrc`、sidecar 和 CI 对齐 |
+| Node runtime | App 内置 Node.js `22.23.2` arm64；不使用或探测用户系统 Node（GUI 启动拿不到 nvm/homebrew 的 `PATH`，且 `node:sqlite` 跨大版本有 API 差异）；`.nvmrc` 与 CI 固定该版本，`engines.node` 只设 `>=22.16` 下界，不限制开发机 |
 | Sidecar 依赖 | Node 二进制 + 纯 `.mjs` + 前端静态产物；服务端不得新增运行时 npm 依赖 |
 | 本地安全 | 一期使用 `127.0.0.1` + `assertLoopbackRequest` + 浏览器 Origin 限制，不使用临时 access token |
 | 产品标识 | `Agent Taskboard` / `io.github.jkj-jim.agenttaskboard` |
@@ -839,7 +879,7 @@ P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打
 | Transport 选择 | 只在任务已指定的 Agent 内选择，不跨 Agent 自动降级 |
 | Codex 手动入口 | `native-draft`：打开原生编辑器并预填，不发送 |
 | Codex 自动入口 | CDP `native-submit`；无可见 Taskboard 面板，session 归入对应 Codex 项目 |
-| Codex 登录态 | 独立 profile 优先复用登录态；不能复用时只引导一次登录并持久保留该 profile |
+| Codex 登录态 | 已验证独立 profile 复用全局 `CODEX_HOME` 登录态，App 不覆盖该变量；若 Codex 改为按 profile 存凭据，只引导一次登录并持久保留该 profile |
 | WorkBuddy | 自动写入并验证 MCP；不要求手填，强制安全授权时最多一次确认 |
 | 自动更新 | production 使用公开 GitHub Releases + Tauri updater；仅 stable release 更新 `latest.json`；beta 禁用 updater，只提供 GitHub Release 手动下载 |
 | 迁移安全网 | 一期首发使用全新数据库，不提供迁移备份与自动恢复；整体延后到任务 `7627EC6179C0-78`，一期不建设版本基线、CI 识别、迁移授权或恢复状态机 |

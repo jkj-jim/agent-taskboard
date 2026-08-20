@@ -6,6 +6,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, test } from "node:test";
 
+import { APP_ID, PROFILE_DEVELOPMENT } from "../shared/app-identity.mjs";
+import { APP_VERSION_FULL } from "../shared/app-version.generated.mjs";
 import { createTaskboardServer } from "../server/index.mjs";
 
 const runningApps = [];
@@ -91,7 +93,12 @@ test("health and the default local project are available", async () => {
 
   const health = await request(baseUrl, "/health");
   assert.equal(health.response.status, 200);
-  assert.deepEqual(health.body, { status: "ok" });
+  assert.equal(health.body.status, "ok");
+  assert.equal(health.body.appId, APP_ID);
+  assert.equal(health.body.profile, PROFILE_DEVELOPMENT);
+  assert.equal(health.body.version, APP_VERSION_FULL);
+  assert.equal(health.body.pid, process.pid);
+  assert.match(health.body.instanceId, /^[0-9a-f-]{36}$/);
 
   const metadata = await request(baseUrl, "/api/meta");
   assert.equal(metadata.response.status, 200);

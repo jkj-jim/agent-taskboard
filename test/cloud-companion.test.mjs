@@ -621,11 +621,13 @@ test("the local companion launches a native Codex task and binds it back to the 
     assert.equal(payload.task.threadId, sessionId);
     assert.equal(nativeLaunches.length, 1);
     assert.equal(nativeLaunches[0].workspacePath, await realpath(directory));
+    // 两次 GET：协调器要先知道负责人才能选 transport，launcher 随后自己再取一次。
     assert.deepEqual(upstreamCalls.map((call) => [new URL(call.url).pathname, call.init.method]), [
+      ["/api/tasks/remote-task-id", "GET"],
       ["/api/tasks/remote-task-id", "GET"],
       ["/api/tasks/remote-task-id/agent-sessions", "POST"],
     ]);
-    assert.deepEqual(await new Response(upstreamCalls[1].init.body).json(), {
+    assert.deepEqual(await new Response(upstreamCalls[2].init.body).json(), {
       agentKind: "codex",
       sessionId,
       previousSessionId: null,

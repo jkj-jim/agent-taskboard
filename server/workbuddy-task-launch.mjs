@@ -1,8 +1,13 @@
 import path from "node:path";
+import { renderWorkbuddyTaskInstruction } from "./agents/task-instruction.mjs";
 
 import { ApiError } from "./database.mjs";
 import { agentByKind } from "../shared/agents.mjs";
-import { ensureWorkbuddyBoardAccess, readMcpRegistration } from "./workbuddy-host-setup.mjs";
+import {
+  WORKBUDDY_SERVER_NAME,
+  ensureWorkbuddyBoardAccess,
+  readMcpRegistration,
+} from "./workbuddy-host-setup.mjs";
 
 const definition = agentByKind("workbuddy");
 
@@ -32,6 +37,8 @@ export function createWorkbuddyTaskLaunchCoordinator({
   resolveWorkspace,
   ensureBoardAccess = ensureWorkbuddyBoardAccess,
   readRegistration = readMcpRegistration,
+  // 提示词里的工具名由它派生；服务器改名时两处必须一起变。
+  mcpServerName = WORKBUDDY_SERVER_NAME,
 }) {
   let creationQueue = Promise.resolve();
   const launches = new Map();
@@ -62,23 +69,11 @@ export function createWorkbuddyTaskLaunchCoordinator({
   }
 
   function instructionFor(task) {
-    // Tool names carry no board address, which is what keeps this text past
-    // WorkBuddy's content validation.
-    //
-    // Naming the tools and forbidding a CLI is not redundant with the skill:
-    // left to itself the agent hunts for `taskctl` on disk, and if it finds
-    // this checkout it will write to the board with whatever session id happens
-    // to be in its environment — attributing the work to the wrong agent.
-    return [
-      `执行任务 ${task.identifier}。`,
-      "只使用 taskboard 的 MCP 工具操作看板：",
-      "taskboard_get_task、taskboard_add_comment、taskboard_move_task。",
-      "不要查找、安装或运行任何命令行工具。",
-      `先用 taskboard_get_task 读取 ${task.identifier} 的最新内容与全部评论，`,
-      "按 manage-taskboard 技能中的流程规则完成工作，",
-      "再用 taskboard_add_comment 写交付说明，",
-      "最后用 taskboard_move_task 把任务移至 in_review。",
-    ].join("");
+    // 正文只在 Agent renderer 里成形（§10）。
+    return renderWorkbuddyTaskInstruction({
+      identifier: task.identifier,
+      mcpServerName,
+    });
   }
 
   async function run(input) {

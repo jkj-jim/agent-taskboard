@@ -1,0 +1,231 @@
+name: macOS release
+
+# 只有 app-v* tag 触发发布。stable（无 pre-release 标记）才生成并上传 latest.json；
+# beta 只发手动下载产物（document/design/desktop-app-packaging.md §14）。
+#
+# 签名有两条路线，由 secrets 里有没有 APPLE_SIGNING_IDENTITY 自动选择：
+#   ad-hoc（默认，零成本）  bundle 由 tauri.conf.json 的 signingIdentity "-" 完成
+#                          自签并封存资源，不公证。用户首次打开要手动放行一次。
+#   developer-id（可选）    需要 Apple Developer Program，额外做公证与 staple，
+#                          用户双击即开。
+# 两条路线都要求 updater 私钥（`tauri signer generate`，免费），它与 Apple 无关，
+# 管的是「自动更新下载到的包确实是本仓库发的」。
+on:
+  push:
+    tags: ["app-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 app-v* tag
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 与验证 workflow 同机型，避免发布产物跑在没验证过的系统上。
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: 解析发布通道
+        id: channel
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#app-v}"
+          manifest=$(node -p "require('./package.json').version")
+          # tag 必须与 package.json#version 完全一致，包括 pre-release 标记。
+          [ "$version" = "$manifest" ] || {
+            echo "tag $tag 与 package.json#version $manifest 不一致"; exit 1;
+          }
+          case "$version" in
+            *-*) channel=beta ;;
+            *)   channel=stable ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "发布 $version（$channel）"
+
+      - name: 解析签名路线
+        id: signing
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          # 空 secret 会变成空串。空串不能直接传给 tauri——它只判断变量存不存在，
+          # 传空串会走进「有身份」的分支然后签名失败，所以这里显式分成两条路。
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "mode=developer-id" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 拒绝覆盖已发布的版本
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          if gh release view "$tag" --json assets --jq '.assets | length' 2>/dev/null | grep -qv '^0$'; then
+            echo "$tag 已经有已发布的产物，不允许以同一版本重新发布不同产物"
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: App 版本单一来源一致
+        run: node scripts/sync-app-version.mjs --check
+
+      - name: 下载并校验随包 Node 二进制
+        run: npm run sidecar:node
+
+      - name: 随包 Node 上跑完整测试
+        run: ./src-tauri/binaries/node-aarch64-apple-darwin --test
+
+      - name: 前端静态产物
+        run: npm run build:web
+
+      - name: updater 公私钥成对
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # 唯一会静默失败的环节：口令错了打包会直接报错，但公私钥不成对时打包成功、
+        # latest.json 照样发出去，客户端却全部拒绝——失败发生在用户机器上。
+        run: node scripts/verify-updater-keypair.mjs
+
+      - name: 导入签名证书
+        if: steps.signing.outputs.mode == 'developer-id'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          keychain=build.keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security import certificate.p12 -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          rm certificate.p12
+
+      - name: 打包（Developer ID 签名与公证）
+        if: steps.signing.outputs.mode == 'developer-id'
+        env:
+          # 私钥、Apple 凭据与 updater 私钥只存在于 secrets，不进仓库也不进产物。
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # updater 产物与公钥只在发布配置里开：本地 `npx tauri build` 不需要私钥。
+        run: npx tauri build --config src-tauri/tauri.release.conf.json --bundles app,dmg
+
+      - name: 打包（ad-hoc 自签，不公证）
+        if: steps.signing.outputs.mode == 'adhoc'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # 不传任何 APPLE_* 变量：tauri 读到 signingIdentity "-" 会由内而外自签
+        # （node → 主程序 → bundle），并跳过公证。
+        run: npx tauri build --config src-tauri/tauri.release.conf.json --bundles app,dmg
+
+      - name: 签名封存与随包二进制自检
+        # 两条路线共用。签名结构不完整时 `--deep --strict` 会报「code has no
+        # resources but signature indicates they must be present」，公证一定被拒。
+        run: |
+          app="src-tauri/target/release/bundle/macos/Agent Taskboard.app"
+          [ -f "$app/Contents/_CodeSignature/CodeResources" ] || {
+            echo "缺少 _CodeSignature/CodeResources，资源没有被封存"; exit 1;
+          }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          # 重签会丢掉 Node 官方二进制自带的 hardened runtime 例外，缺了 allow-jit
+          # 的 node 一启动就 SIGTRAP，sidecar 静默起不来。这两条必须在签名后仍在。
+          entitlements=$(codesign -d --entitlements - --xml "$app/Contents/MacOS/node" 2>/dev/null)
+          for key in allow-jit allow-unsigned-executable-memory; do
+            case "$entitlements" in
+              *"com.apple.security.cs.$key"*) ;;
+              *) echo "随包 node 签名后缺少 $key，V8 会 SIGTRAP"; exit 1 ;;
+            esac
+          done
+          # 光看 entitlements 不够，真跑一次才算数
+          "$app/Contents/MacOS/node" -e 'console.log("bundled node ok", process.version)'
+
+      - name: 公证与 Gatekeeper 验证
+        if: steps.signing.outputs.mode == 'developer-id'
+        # 公证与 Gatekeeper 任一失败都不得进入下面的发布步骤（§14）。
+        run: |
+          app="src-tauri/target/release/bundle/macos/Agent Taskboard.app"
+          spctl --assess --type execute --verbose "$app"
+          xcrun stapler validate "$app"
+
+      - name: 校验产物身份
+        run: |
+          plist="src-tauri/target/release/bundle/macos/Agent Taskboard.app/Contents/Info.plist"
+          minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist")
+          [ "$minimum" = "14.0" ] || { echo "LSMinimumSystemVersion=$minimum"; exit 1; }
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist")
+          echo "打包版本 $version（判断只依据编译期常量，这里仅作记录）"
+
+      - name: 生成首次打开说明
+        id: notes
+        run: |
+          if [ "${{ steps.signing.outputs.mode }}" = "developer-id" ]; then
+            echo "本版本已签名并公证，双击即可打开。" > FIRST-LAUNCH.md
+          else
+            cat > FIRST-LAUNCH.md <<'EOF'
+## 首次打开
+
+本版本为 ad-hoc 自签（未加入 Apple 开发者计划），首次打开需要手动放行一次：
+
+1. 把 `Agent Taskboard.app` **用访达拖进「应用程序」**（不要在磁盘映像里直接双击运行）；
+2. 双击打开，系统会提示「无法打开，因为无法验证开发者」；
+3. macOS 14：在访达里按住 Control 点击应用图标 →「打开」→ 再点「打开」；
+   macOS 15 及以上：打开「系统设置 →隐私与安全性」，在最下方点「仍要打开」。
+
+放行一次之后就不再提示，后续的自动更新也不会再弹。
+EOF
+          fi
+          cat FIRST-LAUNCH.md
+
+      - name: 发布 stable（含 latest.json）
+        if: steps.channel.outputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          bundle=src-tauri/target/release/bundle
+          cat CHANGELOG-latest.md FIRST-LAUNCH.md > RELEASE-NOTES.md
+          gh release create "$tag" --title "$tag" --notes-file RELEASE-NOTES.md \
+            || gh release edit "$tag" --draft=false
+          gh release upload "$tag" \
+            "$bundle"/dmg/*.dmg \
+            "$bundle"/macos/*.app.tar.gz \
+            "$bundle"/macos/*.app.tar.gz.sig \
+            --clobber
+          node scripts/build-latest-json.mjs \
+            --tag "$tag" \
+            --bundle "$bundle" \
+            --out latest.json
+          gh release upload "$tag" latest.json --clobber
+
+      - name: 发布 beta（仅手动下载产物）
+        if: steps.channel.outputs.channel == 'beta'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          bundle=src-tauri/target/release/bundle
+          # pre-release 只提供手动下载，绝不上传或覆盖 stable 的 latest.json。
+          gh release create "$tag" --title "$tag" --prerelease --notes-file FIRST-LAUNCH.md \
+            || gh release edit "$tag" --prerelease
+          gh release upload "$tag" "$bundle"/dmg/*.dmg --clobber

@@ -1,4 +1,5 @@
 import type {
+  AgentRuntimeSnapshot,
   ActorIdentity,
   AgentStartResult,
   AiChatCatalog,
@@ -126,6 +127,57 @@ export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
 
 export async function getTaskboardMetadata(signal?: AbortSignal): Promise<TaskboardMetadata> {
   return request<TaskboardMetadata>("/api/meta", { signal });
+}
+
+export async function getAgentRuntimeStatuses(
+  force = false,
+  signal?: AbortSignal,
+): Promise<AgentRuntimeSnapshot> {
+  return request<AgentRuntimeSnapshot>(
+    `/api/local/agents${force ? "?refresh=1" : ""}`,
+    { signal },
+  );
+}
+
+/** UI 不生成 Agent 最终提示词，正文由服务端的 renderer 产出（§10）。 */
+export async function getTaskInstruction(taskId: string, signal?: AbortSignal): Promise<string> {
+  const data = await request<{ instruction: string }>(
+    `/api/local/tasks/${encodeURIComponent(taskId)}/instruction`,
+    { signal },
+  );
+  return data.instruction;
+}
+
+export interface SkillStatus {
+  profile: string;
+  writable: boolean;
+  templateVersion: string;
+  installed: boolean;
+  claudeLink: { state: "linked" | "missing" | "conflict"; path: string; target: string | null };
+  marker: { installedVersion?: string } | null;
+  diff: { identical: boolean; files: { path: string; state: string }[] };
+}
+
+export async function getSkillStatus(signal?: AbortSignal): Promise<SkillStatus> {
+  return request<SkillStatus>("/api/local/skill", { signal });
+}
+
+export async function applySkillTemplate(): Promise<{ backupPath: string | null }> {
+  return request<{ backupPath: string | null }>("/api/local/skill/apply", { method: "POST" });
+}
+
+export interface WorkbuddyConfigureResult {
+  serverName: string;
+  url: string;
+  backupPath: string | null;
+  changed: boolean;
+  handshake: { ok: boolean; detail: string };
+  requiresApproval: boolean;
+  approvalHint: string;
+}
+
+export async function configureWorkbuddy(): Promise<WorkbuddyConfigureResult> {
+  return request<WorkbuddyConfigureResult>("/api/local/workbuddy/configure", { method: "POST" });
 }
 
 export async function getTaskboardRevision(

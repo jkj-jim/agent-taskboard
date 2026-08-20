@@ -1,5 +1,6 @@
 import { ApiError } from "../database.mjs";
 import { agentByKind } from "../../shared/agents.mjs";
+import { CONFIGURE_WORKBUDDY_ACTION } from "../../shared/agent-runtime.mjs";
 import { createWorkbuddyDesktopController } from "../workbuddy-desktop-controller.mjs";
 
 const definition = agentByKind("workbuddy");
@@ -17,6 +18,8 @@ export function createWorkbuddyAgent(config = {}) {
     desktopController = createWorkbuddyDesktopController({
       preferredPort: config.debuggingPort,
     }),
+    // 由 app.mjs 惰性传入：origin 要等 listen() 之后才知道。
+    verifyBoardMcp = async () => ({ ok: true, detail: "" }),
   } = config;
 
   function headlessUnsupported(what) {
@@ -45,11 +48,41 @@ export function createWorkbuddyAgent(config = {}) {
 
     async status() {
       const inspected = await desktopController.inspect();
-      return {
-        available: inspected.available,
-        authenticated: null,
-        detail: inspected.detail,
-      };
+      if (!inspected.available) {
+        // 装没装、能不能连，controller 只回一个 available；无法再细分时按
+        // needs_setup 呈现并给出下载页，不谎称已确认未安装。
+        return {
+          status: "needs_setup",
+          transports: [],
+          reasonCode: "AGENT_NOT_INSTALLED",
+          statusMessage: `${definition.label} 未在运行，或没有开启看板需要的调试端口`
+            + `${inspected.detail ? `（${inspected.detail}）` : ""}。`,
+          // 不引导下载：装没装由用户自己管；这里给的是「点一下就配好」的入口（§11）。
+          action: CONFIGURE_WORKBUDDY_ACTION,
+        };
+      }
+      // §11 的验收要求是「MCP 握手并确认 Taskboard tools 可列出」才算 ready，
+      // 只看客户端在不在会把「连不上看板」误报成可用。
+      const handshake = await verifyBoardMcp().catch((error) => ({
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      }));
+      if (!handshake.ok) {
+        return {
+          status: "needs_setup",
+          transports: [],
+          reasonCode: "WORKBUDDY_AUTH_REQUIRED",
+          statusMessage: `${definition.label} 还没有连上看板的 MCP：${handshake.detail}`,
+          action: {
+            kind: "app-action",
+            label: "去 WorkBuddy 授权",
+            message: "打开 WorkBuddy 的 MCP 服务管理，允许看板这一项后回到这里重新检测。",
+            autoRunnable: true,
+            actionId: "configure-workbuddy",
+          },
+        };
+      }
+      return { status: "ready", transports: ["host-draft", "host-submit"] };
     },
 
     resolveWorkspace() {

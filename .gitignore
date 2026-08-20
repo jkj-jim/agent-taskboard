@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .data/
+src-tauri/target/
+src-tauri/binaries/
 .wrangler/
 .dev.vars*
 .tmp/

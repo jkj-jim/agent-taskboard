@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    随包 Node 的 V8 需要 JIT。Node 官方二进制自带这两条 hardened runtime 例外，
+    但打包时 Tauri 会用本项目的身份重签 Contents/MacOS/node，重签会丢掉原有
+    entitlements——实测重签后 node 一启动就 EXC_BREAKPOINT / SIGTRAP，
+    sidecar 起不来。这份 plist 就是把这两条补回去。
+
+    只补 V8 必需的两条。Node 官方还带 allow-dyld-environment-variables、
+    disable-executable-page-protection、disable-library-validation 和
+    get-task-allow：前三条本项目用不到（不加载原生插件、不注入 dyld 变量），
+    get-task-allow 会让 Developer ID 产物在公证时被拒，一律不加。
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

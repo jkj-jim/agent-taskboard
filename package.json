@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.16"
   },
   "bin": {
     "taskctl": "./cli/taskctl.mjs"
@@ -14,6 +14,10 @@
     "codex:inject": "node scripts/codex-injector.mjs --watch",
     "codex:daemon": "node scripts/codex-injector.mjs --daemon --open",
     "codex:refresh": "node scripts/codex-injector.mjs --refresh",
+    "codex:verify-profile": "node scripts/verify-codex-profile-login.mjs",
+    "sidecar:node": "node scripts/fetch-node-sidecar.mjs",
+    "verify:updater-key": "node scripts/verify-updater-keypair.mjs",
+    "sync:version": "node scripts/sync-app-version.mjs",
     "workbuddy": "node scripts/workbuddy.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:server": "node --watch server/index.mjs --dev",
@@ -48,6 +52,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

@@ -135,7 +135,7 @@ test("a completed web build refreshes an already-open Codex iframe", () => {
 });
 
 test("the resident injector hot-reloads its source without replacing the watcher", () => {
-  assert.match(source, /let \{ source, sourceHash \} = await currentInjectionSource\(\)/);
+  assert.match(source, /let \{ source, sourceHash \} = await currentInjectionSource\(\{ panel: !options\.automationOnly \}\)/);
   assert.match(source, /latestInjection\.sourceHash !== sourceHash/);
   assert.match(source, /injectedTargets\.forEach\(\(connection\) => connection\.close\(\)\)/);
   assert.match(source, /injectedTargets\.clear\(\)/);

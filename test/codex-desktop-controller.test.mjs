@@ -243,10 +243,12 @@ test("native task instructions use the absolute taskctl shim for the whole turn"
   await coordinator.launch(launchInput("quoted"));
 
   assert.match(createInput.instruction, /^执行任务 TEST-quoted。/);
-  assert.match(createInput.instruction, /每一次 Taskboard 操作都使用/);
+  // shim 在正文中只出现一次，且带引号原样保留路径里的单引号（§10）。
+  const shim = "'/tmp/taskboard'\\''s bin/taskctl'";
+  assert.equal(createInput.instruction.split(shim).length - 1, 1);
   assert.match(
     createInput.instruction,
-    /先运行 '\/tmp\/taskboard'\\''s bin\/taskctl' issue brief 'TEST-quoted' --json。$/,
+    /先用它运行 issue brief 'TEST-quoted' --json，本轮后续 Taskboard 操作也只使用该入口。$/,
   );
   assert.equal(createInput.title, current.title);
   assert.ok(createInput.instruction.length <= 1_024);
@@ -295,7 +297,7 @@ test("native task launch rejects instructions over the injector limit", async ()
     },
     loadTask: async () => current,
     resolveWorkspace: async () => "/tmp/project",
-    resolveTaskctlShim: async () => `/tmp/${"x".repeat(600)}/taskctl`,
+    resolveTaskctlShim: async () => `/tmp/${"x".repeat(1_100)}/taskctl`,
     bindSession: async () => current,
     skillPath: "/tmp/manage-taskboard/SKILL.md",
     codexActorId: CODEX_ACTOR_ID,
