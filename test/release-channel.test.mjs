@@ -42,6 +42,25 @@ test("a stable latest.json points at the tagged arm64 artifact", () => {
   assert.match(latest.platforms["darwin-aarch64"].url, /\/releases\/download\/app-v2\.1\.0\//);
 });
 
+test("both workflows stay parseable YAML", async () => {
+  // `run: |` 是 YAML 块标量，里面任何顶格的行都会把块提前结束，整个文件随之不合法。
+  // Actions 对不合法的 workflow 不报语法错，只是把它显示成一个立刻失败的文件路径，
+  // 很容易被当成「某一步跑挂了」。heredoc 正文必须顶格，正是最容易踩进来的写法。
+  const TOP_LEVEL_KEYS = ["name:", "on:", "permissions:", "jobs:", "env:", "defaults:", "concurrency:", "run-name:"];
+  for (const name of ["macos-verify.yml", "macos-release.yml"]) {
+    const workflow = await readFile(
+      path.join(projectRoot, ".github", "workflows", name),
+      "utf8",
+    );
+    const stray = workflow.split("\n")
+      .map((line, index) => ({ line, number: index + 1 }))
+      .filter(({ line }) => line.length > 0 && !line.startsWith(" ") && !line.startsWith("#"))
+      .filter(({ line }) => !TOP_LEVEL_KEYS.some((key) => line.startsWith(key)))
+      .map(({ line, number }) => `${name}:${number} ${line.slice(0, 40)}`);
+    assert.deepEqual(stray, []);
+  }
+});
+
 test("the release workflow keeps the channel discipline the design fixes", async () => {
   const workflow = await readFile(
     path.join(projectRoot, ".github", "workflows", "macos-release.yml"),
@@ -100,7 +119,18 @@ test("signing degrades to ad-hoc when no Apple identity is configured", async ()
     "notarization must gate the release steps",
   );
   // ad-hoc 版本必须把首次打开的放行步骤写进 release notes
-  assert.match(workflow, /仍要打开/);
+  for (const note of ["first-launch-adhoc.md", "first-launch-notarized.md"]) {
+    assert.match(workflow, new RegExp(`document/release/${note}`), `workflow 必须引用 ${note}`);
+  }
+  const adhocNote = await readFile(
+    path.join(projectRoot, "document", "release", "first-launch-adhoc.md"),
+    "utf8",
+  );
+  // macOS 15 起 Apple 取消了 Control+点击绕过，两种系统的步骤都要写清
+  assert.match(adhocNote, /仍要打开/);
+  assert.match(adhocNote, /Control/);
+  // 带隔离属性直接双击会触发 App Translocation，sidecar 起不来，必须让用户先拖进「应用程序」
+  assert.match(adhocNote, /应用程序/);
 });
 
 test("the bundle is ad-hoc signed and keeps the entitlements the bundled Node needs", async () => {

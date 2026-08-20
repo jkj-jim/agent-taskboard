@@ -178,22 +178,14 @@ jobs:
 
       - name: 生成首次打开说明
         id: notes
+        # 说明正文放在仓库文件里而不是 heredoc：heredoc 的内容必须顶格，而
+        # `run: |` 是 YAML 块标量，顶格的行会把块提前结束掉——整个 workflow
+        # 变成不合法的 YAML，Actions 里只会显示成一个立刻失败的文件路径。
         run: |
           if [ "${{ steps.signing.outputs.mode }}" = "developer-id" ]; then
-            echo "本版本已签名并公证，双击即可打开。" > FIRST-LAUNCH.md
+            cp document/release/first-launch-notarized.md FIRST-LAUNCH.md
           else
-            cat > FIRST-LAUNCH.md <<'EOF'
-## 首次打开
-
-本版本为 ad-hoc 自签（未加入 Apple 开发者计划），首次打开需要手动放行一次：
-
-1. 把 `Agent Taskboard.app` **用访达拖进「应用程序」**（不要在磁盘映像里直接双击运行）；
-2. 双击打开，系统会提示「无法打开，因为无法验证开发者」；
-3. macOS 14：在访达里按住 Control 点击应用图标 →「打开」→ 再点「打开」；
-   macOS 15 及以上：打开「系统设置 →隐私与安全性」，在最下方点「仍要打开」。
-
-放行一次之后就不再提示，后续的自动更新也不会再弹。
-EOF
+            cp document/release/first-launch-adhoc.md FIRST-LAUNCH.md
           fi
           cat FIRST-LAUNCH.md
 
