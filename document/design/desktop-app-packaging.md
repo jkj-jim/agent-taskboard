@@ -665,6 +665,19 @@ CI 按 secrets 里有没有 `APPLE_SIGNING_IDENTITY` 自动选择，无需改配
 
 不写 `signingIdentity` 不是「不签名」而是更差的一档：产物只有链接器给的 ad-hoc 签名，`Info.plist` 未绑定、资源未封存，`codesign --verify --deep --strict` 报 `code has no resources but signature indicates they must be present`，bundle identifier 也退化成链接器生成的随机串。
 
+### 更新入口为什么在 Rust 侧
+
+主窗口在 sidecar 健康后会 `navigate` 到 `http://127.0.0.1:<port>`，React UI 因此跑在 HTTP 源上，那个源默认拿不到 Tauri IPC。把更新入口放前端就得给 HTTP 源开 remote capability，扩大了 IPC 暴露面；放 Rust 侧则一行 capability 都不用动。
+
+更重要的是可用性：sidecar 起不来、界面停在启动故障页时，Rust 侧的菜单入口照样能用——而「装了一个起不来的版本」恰恰是最需要更新的时候。
+
+两条实现约束，都是实测踩出来的：
+
+- **updater 插件必须在 `setup()` 里注册，不能挂在 `Builder` 上。** 注册要读 `plugins.updater` 配置，而本地 `npx tauri build` 不带发布配置、没有 pubkey；挂 `Builder` 上会让本地产物一启动就失败。在 `setup()` 里注册还顺便实现了 beta 的硬约束：不是 production 就不注册。
+- **`restart()` 必须回主线程。** 下载安装跑在 tokio worker 上，在那里直接调 `restart()` 会走进 App 的退出清理，该路径在 macOS 上要碰 AppKit，实测以 `panic in a function that cannot unwind` abort，而且时好时坏——同一份二进制两次演练一次成功一次崩。改用 `run_on_main_thread` 后连跑四轮无 panic。
+
+安装顺序是「停 sidecar → 校验签名并替换 bundle → 回主线程 restart」。先停 sidecar 是因为它跑的正是包内的 `Contents/MacOS/node`，且要让 WAL 被检查点写回主库。安装失败保留当前版本并把 sidecar 拉回来。
+
 ### 随包 Node 的 entitlements
 
 打包时 Tauri 会用本项目的身份重签 `Contents/MacOS/node`，**重签会丢掉 Node 官方二进制自带的 hardened runtime 例外**。缺了 `com.apple.security.cs.allow-jit` 与 `allow-unsigned-executable-memory`，V8 无法申请可执行内存，node 一启动就 `EXC_BREAKPOINT / SIGTRAP`，sidecar 静默起不来，用户只看到一个连不上的空窗口。
@@ -678,8 +691,8 @@ CI 按 secrets 里有没有 `APPLE_SIGNING_IDENTITY` 自动选择，无需改配
 - `bundle.createUpdaterArtifacts = true`；
 - updater 公钥编译进 App；
 - updater 私钥、Apple 证书和公证凭据只放 GitHub Actions secrets；
-- production App 启动后延迟检查一次，设置页提供手动检查；
-- beta App 禁用 stable updater 检查，设置页只显示当前 beta 版本和 GitHub Release 手动下载入口；
+- production App 启动后延迟检查一次，应用菜单提供「检查更新…」手动入口；
+- beta App 禁用 stable updater 检查——不是「前端不去调」，而是 updater 插件根本不注册；菜单项改为打开 GitHub Release 列表；
 - 下载前展示版本和发布说明；
 - 签名校验通过后安装；
 - 离线或 GitHub 不可达不阻止 App 启动；
