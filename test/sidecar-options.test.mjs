@@ -94,7 +94,7 @@ test("installed startup refuses to fall back to the repository root", () => {
 test("environment variables cannot stand in for a missing installed parameter", () => {
   assert.throws(
     () => parseSidecarArgv(installedArgv({ "--static-directory": null }), {
-      env: { CODEX_TASKBOARD_STATIC_DIR: "/somewhere/web" },
+      env: { AGENT_TASKBOARD_STATIC_DIR: "/somewhere/web" },
       projectRoot,
     }),
     /--static-directory/,
@@ -159,10 +159,10 @@ test("development startup falls back to repository paths", () => {
 
 test("CLI beats environment, environment beats the development default", () => {
   const env = {
-    CODEX_TASKBOARD_PORT: "51000",
-    CODEX_TASKBOARD_HOST: "127.0.0.1",
-    CODEX_TASKBOARD_DATA_DIR: "/from/env",
-    CODEX_TASKBOARD_SKILL_PATH: "/from/env/SKILL.md",
+    AGENT_TASKBOARD_PORT: "51000",
+    AGENT_TASKBOARD_HOST: "127.0.0.1",
+    AGENT_TASKBOARD_DATA_DIR: "/from/env",
+    AGENT_TASKBOARD_SKILL_PATH: "/from/env/SKILL.md",
   };
 
   const fromEnv = parseSidecarArgv([], { env, projectRoot });

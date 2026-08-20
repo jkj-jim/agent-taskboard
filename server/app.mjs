@@ -16,6 +16,7 @@ import {
 } from "../shared/domain.mjs";
 import { APP_ID, PROFILE_DEVELOPMENT } from "../shared/app-identity.mjs";
 import { APP_VERSION_FULL } from "../shared/app-version.generated.mjs";
+import { ENV_PREFIX, readEnv } from "../shared/taskboard-env.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
 import {
   ASSIGNEE_TARGETS,
@@ -1394,7 +1395,7 @@ async function discoverWorkflowCapabilities(resolved, workspacePath) {
 }
 
 export function resolveServerOptions(options = {}) {
-  const configuredDataDirectory = options.dataDirectory ?? process.env.CODEX_TASKBOARD_DATA_DIR;
+  const configuredDataDirectory = options.dataDirectory ?? readEnv("DATA_DIR");
   const dataDirectory = configuredDataDirectory
     ? path.resolve(configuredDataDirectory)
     : path.join(PROJECT_ROOT, ".data");
@@ -1425,18 +1426,18 @@ export function resolveServerOptions(options = {}) {
   };
 }
 
-export function resolvePort(value = process.env.CODEX_TASKBOARD_PORT ?? "47823") {
+export function resolvePort(value = readEnv("PORT") ?? "47823") {
   const port = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("CODEX_TASKBOARD_PORT must be an integer between 1 and 65535");
+    throw new Error(`${ENV_PREFIX}PORT must be an integer between 1 and 65535`);
   }
   return port;
 }
 
-export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "0.0.0.0") {
+export function resolveHost(value = readEnv("HOST") ?? "0.0.0.0") {
   const host = String(value).trim();
   if (host !== "127.0.0.1" && host !== "0.0.0.0") {
-    throw new Error("CODEX_TASKBOARD_HOST must be 127.0.0.1 or 0.0.0.0");
+    throw new Error(`${ENV_PREFIX}HOST must be 127.0.0.1 or 0.0.0.0`);
   }
   return host;
 }
@@ -1725,7 +1726,7 @@ export function createTaskboardServer(options = {}) {
     const address = server.address();
     const port = address && typeof address === "object" && address.port
       ? address.port
-      : Number(process.env.CODEX_TASKBOARD_PORT ?? 47823);
+      : Number(readEnv("PORT") ?? 47823);
     return `http://127.0.0.1:${port}`;
   }
 

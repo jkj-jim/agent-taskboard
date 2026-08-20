@@ -105,9 +105,9 @@ async function main() {
     cwd: projectRoot,
     env: {
       ...process.env,
-      CODEX_TASKBOARD_HOST: "127.0.0.1",
-      CODEX_TASKBOARD_PORT: String(port),
-      CODEX_TASKBOARD_DATA_DIR: dataDirectory,
+      AGENT_TASKBOARD_HOST: "127.0.0.1",
+      AGENT_TASKBOARD_PORT: String(port),
+      AGENT_TASKBOARD_DATA_DIR: dataDirectory,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

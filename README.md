@@ -66,7 +66,7 @@ npm run taskctl -- issue create \
   --labels product,mvp
 ```
 
-如果希望直接在 shell 路径中使用 `taskctl`，请执行 `npm link`。通过 `CODEX_TASKBOARD_URL` 可让 CLI 指向其他本地或局域网服务。云部署通过回环地址上的配套服务和 `taskctl cloud login` 进行配置。
+如果希望直接在 shell 路径中使用 `taskctl`，请执行 `npm link`。通过 `AGENT_TASKBOARD_URL` 可让 CLI 指向其他本地或局域网服务。云部署通过回环地址上的配套服务和 `taskctl cloud login` 进行配置。
 
 ## 安装 Skill
 
@@ -197,18 +197,20 @@ Codex 原生启动由本地 Taskboard 服务串行执行：服务连接已经运
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `CODEX_TASKBOARD_HOST` | `0.0.0.0` | HTTP 绑定地址；使用 `127.0.0.1` 可禁用局域网访问 |
-| `CODEX_TASKBOARD_PORT` | `47823` | 本地 HTTP 端口 |
-| `CODEX_TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
-| `CODEX_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API 源地址；服务会自动注入给它启动的 Agent |
+| `AGENT_TASKBOARD_HOST` | `0.0.0.0` | HTTP 绑定地址；使用 `127.0.0.1` 可禁用局域网访问 |
+| `AGENT_TASKBOARD_PORT` | `47823` | 本地 HTTP 端口 |
+| `AGENT_TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
+| `AGENT_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API 源地址；服务会自动注入给它启动的 Agent |
 | `CODEX_EXECUTABLE` | `codex` | Codex CLI 可执行文件 |
 | `CODEX_HOME` | `~/.codex` | Codex 状态目录 |
 | `CLAUDE_EXECUTABLE` | `claude` | Claude Code CLI 可执行文件 |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 状态目录（Skill、会话记录） |
 
+以上 `AGENT_TASKBOARD_*` 的旧名 `CODEX_TASKBOARD_*` 仍然识别，规范名优先。留着旧名是因为它会写在磁盘上的两处：服务为 Agent 生成的 `taskctl` shim 脚本，以及协作者按旧文档配过的 shell profile。
+
 `taskctl` 通过 `CODEX_THREAD_ID` 或 `CLAUDE_CODE_SESSION_ID` 判断自己运行在哪个 Agent 里；两者都没有时用 `--thread-id` 指定会话，用 `--agent codex|claude` 覆盖自动判断。
 
-`npm start` 会输出本地 URL 和可用的局域网 URL。同一可信网络中的协作者可以打开其中一个局域网 URL，共用同一个 Taskboard 服务。任务、评论和附件变更会通过服务器发送事件广播到所有已打开的客户端；客户端重连时会执行完整刷新，因此不会遗漏断开期间发生的变更。协作者可以设置 `CODEX_TASKBOARD_URL=http://<host-ip>:47823`，让 `taskctl` 指向共享服务。
+`npm start` 会输出本地 URL 和可用的局域网 URL。同一可信网络中的协作者可以打开其中一个局域网 URL，共用同一个 Taskboard 服务。任务、评论和附件变更会通过服务器发送事件广播到所有已打开的客户端；客户端重连时会执行完整刷新，因此不会遗漏断开期间发生的变更。协作者可以设置 `AGENT_TASKBOARD_URL=http://<host-ip>:47823`，让 `taskctl` 指向共享服务。
 
 局域网模式没有账户身份验证：可信局域网中任何能访问该 URL 的人都可以读写 Taskboard。若部署到公网或云端，必须设置经过身份验证的部署边界。
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { resolvePort } from "../server/app.mjs";
+import { readEnv } from "../shared/taskboard-env.mjs";
 import {
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
@@ -129,7 +130,7 @@ function startTaskboard({ detached }) {
     detached,
     env: {
       ...process.env,
-      CODEX_TASKBOARD_HOST: process.env.CODEX_TASKBOARD_HOST?.trim() || "127.0.0.1",
+      AGENT_TASKBOARD_HOST: readEnv("HOST")?.trim() || "127.0.0.1",
     },
     stdio: detached ? "ignore" : "inherit",
   });

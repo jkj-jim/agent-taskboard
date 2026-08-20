@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { ENV_PREFIX, LEGACY_ENV_PREFIX } from "../../shared/taskboard-env.mjs";
+
 export function shellQuote(value) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
@@ -23,7 +25,7 @@ export async function ensureTaskctlBin({
   const shimPath = path.join(binDirectory, "taskctl");
   await writeFile(
     shimPath,
-    `#!/bin/sh\nCODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} exec ${shellQuote(nodePath)} ${shellQuote(cliPath)} "$@"\n`,
+    `#!/bin/sh\n${ENV_PREFIX}URL=${shellQuote(taskboardUrl)} exec ${shellQuote(nodePath)} ${shellQuote(cliPath)} "$@"\n`,
     { mode: 0o755 },
   );
   return binDirectory;
@@ -72,8 +74,11 @@ export function createTaskctlRuntime({
 
   async function environment(baseEnv) {
     const origin = currentOrigin();
+    // 旧名要显式删掉而不是留着。规范名优先，留着也不会读错，但 Agent 子进程会
+    // 看到两个互相矛盾的地址；一旦有人照旧名调试，拿到的就是上一个实例的端口。
+    const { [`${LEGACY_ENV_PREFIX}URL`]: _legacyUrl, ...inherited } = baseEnv;
     return withTaskctlOnPath(
-      { ...baseEnv, CODEX_TASKBOARD_URL: origin },
+      { ...inherited, [`${ENV_PREFIX}URL`]: origin },
       await ensureReady(),
     );
   }

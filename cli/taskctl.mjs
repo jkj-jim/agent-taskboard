@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { normalizeCloudUrl } from "../server/cloud-config.mjs";
+import { ENV_PREFIX, readEnv } from "../shared/taskboard-env.mjs";
 import {
   AGENTS,
   AGENT_KINDS,
@@ -197,7 +198,7 @@ async function execute(parsed, overrides) {
   const env = overrides.env ?? process.env;
   const usesCompanionControl = command.startsWith("cloud ") || command === "project map";
   const api = createApiClient(overrides, {
-    baseUrl: usesCompanionControl || env.CODEX_TASKBOARD_COMPANION_URL !== undefined
+    baseUrl: usesCompanionControl || readEnv("COMPANION_URL", env) !== undefined
       ? resolveCompanionUrl(env)
       : undefined,
     agentKind: parsed.options.agent,
@@ -320,7 +321,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl, agentKind } = {}
   }
 
   const env = overrides.env ?? process.env;
-  const baseUrl = normalizeBaseUrl(explicitBaseUrl ?? env.CODEX_TASKBOARD_URL ?? DEFAULT_API_URL);
+  const baseUrl = normalizeBaseUrl(explicitBaseUrl ?? readEnv("URL", env) ?? DEFAULT_API_URL);
   const agentHeader = { "x-taskboard-agent": resolveAgentKind(overrides, agentKind) };
 
   return {
@@ -953,10 +954,10 @@ function normalizeBaseUrl(rawUrl) {
   try {
     url = new URL(rawUrl);
   } catch {
-    throw usageError("CODEX_TASKBOARD_URL must be a valid URL");
+    throw usageError(`${ENV_PREFIX}URL must be a valid URL`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw usageError("CODEX_TASKBOARD_URL must use http or https");
+    throw usageError(`${ENV_PREFIX}URL must use http or https`);
   }
   url.pathname = url.pathname.replace(/\/$/, "");
   url.search = "";
@@ -965,8 +966,8 @@ function normalizeBaseUrl(rawUrl) {
 }
 
 function resolveCompanionUrl(env) {
-  const rawUrl = env.CODEX_TASKBOARD_COMPANION_URL
-    ?? env.CODEX_TASKBOARD_URL
+  const rawUrl = readEnv("COMPANION_URL", env)
+    ?? readEnv("URL", env)
     ?? DEFAULT_API_URL;
   let url;
   try {

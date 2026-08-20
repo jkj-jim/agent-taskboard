@@ -1,11 +1,12 @@
 // Tauri 壳启动 sidecar 时传入的十个参数（document/design/desktop-app-packaging.md §4）。
-// 优先级固定为：CLI 参数 > CODEX_TASKBOARD_* 环境变量 > 开发版默认值。
+// 优先级固定为：CLI 参数 > AGENT_TASKBOARD_*（旧名 CODEX_TASKBOARD_* 仍认）> 开发版默认值。
 // 安装版（带 --profile）必须显式传满十个，缺任何一个都立即报错，绝不回退到 PROJECT_ROOT。
 
 import path from "node:path";
 
 import { APP_VERSION_FULL } from "../shared/app-version.generated.mjs";
 import { assertAppProfile, assertAppVersionHandshake } from "../shared/app-version.mjs";
+import { readEnv } from "../shared/taskboard-env.mjs";
 
 export const DEVELOPMENT_PORT = 47823;
 export const DEVELOPMENT_HOST = "0.0.0.0";
@@ -14,33 +15,33 @@ export const SIDECAR_PARAMETERS = [
   // profile 与 app-version 是构建期握手，只能由壳传入，不接受环境变量覆盖。
   { flag: "--profile", key: "profile", kind: "profile" },
   { flag: "--app-version", key: "appVersion", kind: "version" },
-  { flag: "--host", key: "host", kind: "host", env: "CODEX_TASKBOARD_HOST" },
-  { flag: "--port", key: "port", kind: "port", env: "CODEX_TASKBOARD_PORT" },
-  { flag: "--data-directory", key: "dataDirectory", kind: "path", env: "CODEX_TASKBOARD_DATA_DIR" },
+  { flag: "--host", key: "host", kind: "host", env: "HOST" },
+  { flag: "--port", key: "port", kind: "port", env: "PORT" },
+  { flag: "--data-directory", key: "dataDirectory", kind: "path", env: "DATA_DIR" },
   {
     flag: "--attachments-directory",
     key: "attachmentsDirectory",
     kind: "path",
-    env: "CODEX_TASKBOARD_ATTACHMENTS_DIR",
+    env: "ATTACHMENTS_DIR",
   },
   {
     flag: "--runtime-directory",
     key: "runtimeDirectory",
     kind: "path",
-    env: "CODEX_TASKBOARD_RUNTIME_DIR",
+    env: "RUNTIME_DIR",
   },
   {
     flag: "--static-directory",
     key: "staticDirectory",
     kind: "path",
-    env: "CODEX_TASKBOARD_STATIC_DIR",
+    env: "STATIC_DIR",
   },
-  { flag: "--skill-path", key: "skillPath", kind: "path", env: "CODEX_TASKBOARD_SKILL_PATH" },
+  { flag: "--skill-path", key: "skillPath", kind: "path", env: "SKILL_PATH" },
   {
     flag: "--taskctl-cli-path",
     key: "taskctlCliPath",
     kind: "path",
-    env: "CODEX_TASKBOARD_TASKCTL_CLI_PATH",
+    env: "TASKCTL_CLI_PATH",
   },
 ];
 
@@ -123,7 +124,7 @@ export function parseSidecarArgv(argv, {
   for (const parameter of SIDECAR_PARAMETERS) {
     const raw = values.has(parameter.key)
       ? values.get(parameter.key)
-      : (parameter.env ? env[parameter.env] : undefined);
+      : (parameter.env ? readEnv(parameter.env, env) : undefined);
     resolved[parameter.key] = raw === undefined || raw === "" ? null : coerce(parameter, raw);
   }
 

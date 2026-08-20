@@ -75,7 +75,7 @@ test("the package injection command remains resident for tab-triggered recovery"
 });
 
 test("the local launcher preserves a running Codex and starts a separate loopback instance", () => {
-  assert.match(source, /CODEX_TASKBOARD_HOST: process\.env\.CODEX_TASKBOARD_HOST\?\.trim\(\) \|\| "127\.0\.0\.1"/);
+  assert.match(source, /AGENT_TASKBOARD_HOST: readEnv\("HOST"\)\?\.trim\(\) \|\| "127\.0\.0\.1"/);
   assert.match(source, /const launcherCodexUserDataPath = path\.join\(projectRoot, "\.data", "codex-user-data"\)/);
   assert.match(source, /async function launchCodex[\s\S]*?Contents", "MacOS", executableName/);
   assert.match(source, /`--user-data-dir=\$\{launcherCodexUserDataPath\}`/);

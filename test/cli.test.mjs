@@ -63,7 +63,7 @@ test("project list uses the default local service and adds schemaVersion", async
   assert.equal(calls[0].init.headers["x-taskboard-client"], "taskctl");
 });
 
-test("CODEX_TASKBOARD_URL overrides the service origin", async () => {
+test("AGENT_TASKBOARD_URL overrides the service origin", async () => {
   let requestedUrl;
   const result = await run(
     ["project", "list", "--json"],
@@ -71,7 +71,7 @@ test("CODEX_TASKBOARD_URL overrides the service origin", async () => {
       requestedUrl = url;
       return response({ projects: [] });
     },
-    { env: { CODEX_TASKBOARD_URL: "https://tasks.example.test/" } },
+    { env: { AGENT_TASKBOARD_URL: "https://tasks.example.test/" } },
   );
 
   assert.equal(result.exitCode, 0);

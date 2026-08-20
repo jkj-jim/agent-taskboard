@@ -47,6 +47,7 @@ test("taskctl runtime memoizes one shim write across concurrent consumers", asyn
   const shimPath = runtime.shimPath();
   const environment = runtime.environment({
     PATH: "/usr/bin",
+    // 上一个实例留下的旧名地址
     CODEX_TASKBOARD_URL: "http://127.0.0.1:1",
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -55,9 +56,10 @@ test("taskctl runtime memoizes one shim write across concurrent consumers", asyn
   releaseWrite();
   assert.equal(await ready, "/tmp/taskctl-runtime/bin");
   assert.equal(await shimPath, "/tmp/taskctl-runtime/bin/taskctl");
+  // 旧名被删掉而不是留着：两个互相矛盾的地址会让照旧名调试的人连到上一个实例
   assert.deepEqual(await environment, {
     PATH: `/tmp/taskctl-runtime/bin${path.delimiter}/usr/bin`,
-    CODEX_TASKBOARD_URL: "http://127.0.0.1:49123",
+    AGENT_TASKBOARD_URL: "http://127.0.0.1:49123",
   });
 });
 
@@ -66,7 +68,8 @@ test("the generated shim quotes paths, overrides stale origins, and remains call
   try {
     const cliPath = path.join(directory, "fake taskctl's.mjs");
     await writeFile(cliPath, `process.stdout.write(JSON.stringify({
-  taskboardUrl: process.env.CODEX_TASKBOARD_URL,
+  taskboardUrl: process.env.AGENT_TASKBOARD_URL,
+  legacy: process.env.CODEX_TASKBOARD_URL ?? null,
   args: process.argv.slice(2),
 }));\n`);
     const runtime = createTaskctlRuntime({
@@ -75,6 +78,7 @@ test("the generated shim quotes paths, overrides stale origins, and remains call
     });
     runtime.initialize("http://127.0.0.1:49123");
 
+    // 环境里留一个旧名的过期地址，shim 必须盖过它
     const staleEnvironment = {
       ...process.env,
       CODEX_TASKBOARD_URL: "http://127.0.0.1:1",
@@ -84,8 +88,10 @@ test("the generated shim quotes paths, overrides stale origins, and remains call
       ["issue", "brief", "TASK-1"],
       { env: staleEnvironment },
     );
+    // shim 只设规范名，旧名原样透传——规范名优先，所以读到的是当前实例
     assert.deepEqual(JSON.parse(direct.stdout), {
       taskboardUrl: "http://127.0.0.1:49123",
+      legacy: "http://127.0.0.1:1",
       args: ["issue", "brief", "TASK-1"],
     });
 
@@ -94,8 +100,10 @@ test("the generated shim quotes paths, overrides stale origins, and remains call
       ["comment", "list", "TASK-1"],
       { env: await runtime.environment(staleEnvironment) },
     );
+    // 走 runtime.environment 时旧名已被删掉，子进程里只剩规范名
     assert.deepEqual(JSON.parse(fromPath.stdout), {
       taskboardUrl: "http://127.0.0.1:49123",
+      legacy: null,
       args: ["comment", "list", "TASK-1"],
     });
 
