@@ -260,7 +260,7 @@ kbd {
   color: var(--text-primary);
 }
 
-.brand-mark svg {
+.brand-mark > img {
   width: 16px;
   height: 16px;
 }

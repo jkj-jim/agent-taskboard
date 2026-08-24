@@ -311,6 +311,18 @@ async function execute(parsed, overrides) {
   }
 }
 
+function unreachable(baseUrl, usingDefault, error) {
+  const details = error instanceof Error ? error.message : String(error);
+  return new TaskctlError(`Cannot reach taskboard service at ${baseUrl}`, {
+    code: "SERVICE_UNAVAILABLE",
+    exitCode: 3,
+    details: usingDefault
+      ? `${details}（没有指定看板，用的是开发实例默认地址 ${DEFAULT_API_URL}；`
+        + "安装版在 http://127.0.0.1:47824，用 AGENT_TASKBOARD_URL 指定）"
+      : details,
+  });
+}
+
 function createApiClient(overrides, { baseUrl: explicitBaseUrl, agentKind } = {}) {
   const fetchImplementation = overrides.fetch ?? globalThis.fetch;
   if (typeof fetchImplementation !== "function") {
@@ -321,7 +333,12 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl, agentKind } = {}
   }
 
   const env = overrides.env ?? process.env;
-  const baseUrl = normalizeBaseUrl(explicitBaseUrl ?? readEnv("URL", env) ?? DEFAULT_API_URL);
+  const configured = explicitBaseUrl ?? readEnv("URL", env);
+  const baseUrl = normalizeBaseUrl(configured ?? DEFAULT_API_URL);
+  // 没人指定看板时用的是开发端口。连不上的时候要说清这一点：同一台机器上可能
+  // 同时跑着安装版（47824）和开发实例（47823），沉默地报「连不上」会让人以为
+  // 服务挂了，其实是连错了那一块。
+  const usingDefault = configured === undefined;
   const agentHeader = { "x-taskboard-agent": resolveAgentKind(overrides, agentKind) };
 
   return {
@@ -339,11 +356,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl, agentKind } = {}
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         });
       } catch (error) {
-        throw new TaskctlError(`Cannot reach taskboard service at ${baseUrl}`, {
-          code: "SERVICE_UNAVAILABLE",
-          exitCode: 3,
-          details: error instanceof Error ? error.message : String(error),
-        });
+        throw unreachable(baseUrl, usingDefault, error);
       }
 
       const payload = await readResponse(response);
@@ -374,11 +387,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl, agentKind } = {}
           },
         });
       } catch (error) {
-        throw new TaskctlError(`Cannot reach taskboard service at ${baseUrl}`, {
-          code: "SERVICE_UNAVAILABLE",
-          exitCode: 3,
-          details: error instanceof Error ? error.message : String(error),
-        });
+        throw unreachable(baseUrl, usingDefault, error);
       }
 
       if (!response.ok) {

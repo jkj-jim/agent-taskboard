@@ -34,7 +34,7 @@
 
 **已经隔离好、不用操心的**：数据库、附件、日志、`taskctl` shim、WorkBuddy 的 MCP 条目（`agent-taskboard` / `agent-taskboard-beta` / `taskboard` 三个名字）。一个看板派发出去的 Agent，它的 `PATH` 里排在最前的是那个看板自己的 shim，shim 又钉住了 `AGENT_TASKBOARD_URL`，所以 Agent 写回的一定是派它出来的那块板子。
 
-**真正共用、需要约定的三件事**：
+**真正共用、需要约定的几件事**：
 
 ### 1. Skill 目录
 
@@ -48,9 +48,27 @@
 
 代价是：改了 skill，三套实例的 Agent 立刻都用新的。这在开发期通常正是你想要的；要验「新用户装上后拿到的 skill 长什么样」，用预发布版看差异（它只读），不要在正式版里应用。
 
-### 2. 手敲 `taskctl` 默认打到哪
+### 2. 你自己在 Codex / Claude 里开的会话打到哪
 
-`taskctl` 不带环境变量时用 `http://127.0.0.1:47823`，也就是**开发实例**。在终端里手敲命令查任务，查的是 dev 的库，不是安装版的。要指向安装版：
+从看板派发的任务，启动指令里带 `taskctl` shim 的绝对路径，写回的一定是派它出来的那块板子。
+
+**你自己在客户端里开会话、让它用 `manage-taskboard` skill 的情况不一样**：没有启动指令，也就没有 shim。Skill 里定好了定位顺序——启动指令的绝对路径 → `PATH` 上的 `taskctl` → 安装版自带的：
+
+```
+~/Library/Application Support/io.github.jkj-jim.agenttaskboard/profiles/production/bin/taskctl
+```
+
+第三条是兜底，所以**默认落在正式版**，和真实用户一致。这个 shim 在安装版首次运行后就存在。
+
+想让终端里直接敲 `taskctl` 也可用，把它软链上 `PATH`：
+
+```bash
+ln -sf ~/Library/Application\ Support/io.github.jkj-jim.agenttaskboard/profiles/production/bin/taskctl ~/.local/bin/taskctl
+```
+
+### 3. 手敲 `taskctl` 默认打到哪
+
+`taskctl` 不带环境变量时用 `http://127.0.0.1:47823`，也就是**开发实例**——这个默认值服务于仓库内开发。连不上时它会把两个端口都写进错误里，不会只说一句「连不上」。要显式指向安装版：
 
 ```bash
 AGENT_TASKBOARD_URL=http://127.0.0.1:47824 npm run taskctl -- issue list --project <id>
@@ -58,7 +76,7 @@ AGENT_TASKBOARD_URL=http://127.0.0.1:47824 npm run taskctl -- issue list --proje
 
 Agent 自己不需要设这个变量，shim 已经钉好了。
 
-### 3. Codex 客户端只有一个
+### 4. Codex 客户端只有一个
 
 `npm run codex` 起的是带隔离 user-data-dir 的独立 Codex 实例（CDP `9231`）；安装版不自己启动 Codex，而是连接已经在跑且挂了注入器的客户端。所以两个看板会去驱动同一个 Codex 实例——同一时刻只让一个看板派发 Codex 任务。Claude 与 WorkBuddy 没这个限制。
 

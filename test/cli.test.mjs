@@ -813,3 +813,25 @@ test("usage errors are stable and never call the service", async () => {
   assert.equal(result.stderr.error.code, "USAGE_ERROR");
   assert.match(result.stderr.error.message, /--title/);
 });
+
+test("an unreachable default board names both ports instead of just failing", async () => {
+  // 同机可能同时跑安装版（47824）和开发实例（47823）。没指定看板时默认连的是
+  // 开发端口，沉默地报「连不上」会让人以为服务挂了，其实是连错了那一块。
+  const unreachable = async () => {
+    throw new Error("fetch failed");
+  };
+
+  const fromDefault = await run(["project", "list", "--json"], unreachable, { env: {} });
+  assert.equal(fromDefault.exitCode, 3);
+  assert.equal(fromDefault.stderr.error.code, "SERVICE_UNAVAILABLE");
+  const details = fromDefault.stderr.error.details;
+  assert.match(details, /47823/, "要说清默认连的是开发端口");
+  assert.match(details, /47824/, "也要给出安装版的地址");
+  assert.match(details, /AGENT_TASKBOARD_URL/);
+
+  // 用户已经明确指定过地址时，这段提示是噪音
+  const explicit = await run(["project", "list", "--json"], unreachable, {
+    env: { AGENT_TASKBOARD_URL: "http://127.0.0.1:59999" },
+  });
+  assert.equal(explicit.stderr.error.details, "fetch failed");
+});

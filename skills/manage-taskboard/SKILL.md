@@ -17,7 +17,21 @@ taskctl issue move ISSUE_ID --status STATUS --if-version N --json
 taskctl comment add ISSUE_ID --body TEXT --json
 ```
 
-只有需要此处未列出的命令或选项时，才读取 [references/cli.md](references/cli.md)。如果启动指令给出了绝对路径形式的 `taskctl` shim，本轮每一次 Taskboard 操作都必须使用该路径，不只是首次读取。
+只有需要此处未列出的命令或选项时，才读取 [references/cli.md](references/cli.md)。
+
+**按这个顺序确定用哪个 `taskctl`，选定后本轮每一次 Taskboard 操作都用同一个，不只是首次读取：**
+
+1. 启动指令里给出的绝对路径 shim。有它就只用它——它已经钉住了派发这次任务的那块看板。
+2. `PATH` 上的 `taskctl`。
+3. 都没有时，用安装版自带的：
+
+   ```bash
+   ~/Library/Application\ Support/io.github.jkj-jim.agenttaskboard/profiles/production/bin/taskctl
+   ```
+
+   这个路径在安装版首次运行后就存在，指向正式看板。
+
+同一台机器上可能同时跑着多块看板（安装版、预发布版、开发实例），它们的数据各自独立。**不要自己设 `AGENT_TASKBOARD_URL` 去猜**：按上面的顺序选，选出来的就是对的那块。三条都不满足说明看板没装或没启动，如实报告，不要改用别的地址。
 
 下文提到 `issue brief` 时，MCP 侧的等价操作是 `get_task`；提到 `issue move` 时等价于 `move_task`；提到 `comment add` 时等价于 `add_comment`。
 

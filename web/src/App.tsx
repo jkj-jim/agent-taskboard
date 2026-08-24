@@ -2039,7 +2039,7 @@ export function App() {
       {!embedded && (
         <aside className="app-nav" aria-label="Taskboard navigation">
           <div className="brand-row">
-            <span className="brand-mark" aria-hidden="true"><LinearIcon name="project" /></span>
+            <span className="brand-mark" aria-hidden="true"><img src="/favicon.png" alt="" /></span>
             <span>任务面板</span>
           </div>
 

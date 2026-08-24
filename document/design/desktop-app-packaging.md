@@ -624,13 +624,13 @@ Codex native 目标格式：
 
 ## 13. App 图标
 
-矢量母版：
+图标母版（1024 × 1024 PNG，含透明通道）：
 
 ```text
-document/design/agent-taskboard-app-icon.svg
+document/design/agent-taskboard-app-icon.png
 ```
 
-构建前使用 `tauri icon` 生成 `src-tauri/icons/` 所需尺寸。图标输出进入签名产物，不修改矢量母版。
+构建前使用 `tauri icon` 生成 `src-tauri/icons/` 所需尺寸。图标输出进入签名产物，不修改图标母版。
 
 ## 14. GitHub Releases 自动更新
 
@@ -878,7 +878,7 @@ P0 任一 Codex 原生链路失败时先解决兼容性，不开始完整 UI 打
 | Sidecar 依赖 | Node 二进制 + 纯 `.mjs` + 前端静态产物；服务端不得新增运行时 npm 依赖 |
 | 本地安全 | 一期使用 `127.0.0.1` + `assertLoopbackRequest` + 浏览器 Origin 限制，不使用临时 access token |
 | 产品标识 | `Agent Taskboard` / `io.github.jkj-jim.agenttaskboard` |
-| 图标 | `document/design/agent-taskboard-app-icon.svg` |
+| 图标 | `document/design/agent-taskboard-app-icon.png` |
 | 开发数据 | 不迁移；开发版与安装版并行运行 |
 | Release profile | stable 固定使用 `production` / 47824 / `profiles/production`；pre-release 固定使用 `beta` / 47825 / `profiles/beta`，构建后不可切换 |
 | App 版本来源 | `package.json#version` 单一来源；构建生成 Rust 与 ESM 完整 SemVer 常量并校验 `tauri.conf.json`；Tauri 通过 `--app-version` 与 sidecar 启动前握手，运行时不读取 `Info.plist` |
