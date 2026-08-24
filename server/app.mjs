@@ -2155,17 +2155,26 @@ export function createTaskboardServer(options = {}) {
             "只有 production 实例可以更新共享 skill；当前实例只读",
           );
         }
-        const applied = await withDeadline(
-          applySkillTemplate({
-            profile: resolved.profile,
-            skillDirectory: path.dirname(resolved.skillPath),
-            templateDirectory: path.join(PROJECT_ROOT, "skills", "manage-taskboard"),
-            profileDirectory: resolved.dataDirectory,
-            appliedAt: new Date().toISOString(),
-          }),
-          15_000,
-          "写入共享 skill 超时",
-        );
+        let applied;
+        try {
+          applied = await withDeadline(
+            applySkillTemplate({
+              profile: resolved.profile,
+              skillDirectory: path.dirname(resolved.skillPath),
+              templateDirectory: path.join(PROJECT_ROOT, "skills", "manage-taskboard"),
+              profileDirectory: resolved.dataDirectory,
+              appliedAt: new Date().toISOString(),
+            }),
+            15_000,
+            "写入共享 skill 超时",
+          );
+        } catch (error) {
+          // 开发机上共享 skill 常是指向仓库的软链，写进去会变成一堆没人做过的本地改动
+          if (error?.code === "SKILL_POINTS_AT_WORKTREE") {
+            throw new ApiError(409, "SKILL_POINTS_AT_WORKTREE", error.message);
+          }
+          throw error;
+        }
         return sendJson(response, 200, applied);
       }
 

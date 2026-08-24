@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -214,4 +214,58 @@ test("applying the template backs up the current skill and is production-only", 
   } finally {
     await f.cleanup();
   }
+});
+
+test("applying the template refuses to write into a git working tree", async () => {
+  const { applySkillTemplate, enclosingGitWorktree } = await import(
+    "../server/agents/skill-install.mjs"
+  );
+  const root = await mkdtemp(path.join(os.tmpdir(), "skill-worktree-"));
+  // 模拟开发机的布局：共享 skill 是一条指向仓库工作树的软链
+  const repo = path.join(root, "repo");
+  const repoSkill = path.join(repo, "skills", "manage-taskboard");
+  await mkdir(path.join(repo, ".git"), { recursive: true });
+  await mkdir(repoSkill, { recursive: true });
+  await writeFile(path.join(repoSkill, "SKILL.md"), "用户改过的内容\n");
+
+  const shared = path.join(root, "shared-skill");
+  await symlink(repoSkill, shared);
+
+  const template = path.join(root, "template");
+  await mkdir(template, { recursive: true });
+  await writeFile(path.join(template, "SKILL.md"), "模板内容\n");
+
+  assert.equal(await enclosingGitWorktree(shared), await realpath(repo));
+
+  await assert.rejects(
+    () => applySkillTemplate({
+      profile: "production",
+      skillDirectory: shared,
+      templateDirectory: template,
+      profileDirectory: path.join(root, "profile"),
+      appliedAt: "2026-08-20T00:00:00.000Z",
+    }),
+    (error) => {
+      assert.equal(error.code, "SKILL_POINTS_AT_WORKTREE");
+      return true;
+    },
+  );
+  // 工作树里的内容必须原样保留
+  assert.equal(await readFile(path.join(repoSkill, "SKILL.md"), "utf8"), "用户改过的内容\n");
+
+  // 不在工作树里的共享目录照常可写
+  const plain = path.join(root, "plain-skill");
+  await mkdir(plain, { recursive: true });
+  await writeFile(path.join(plain, "SKILL.md"), "旧内容\n");
+  const applied = await applySkillTemplate({
+    profile: "production",
+    skillDirectory: plain,
+    templateDirectory: template,
+    profileDirectory: path.join(root, "profile"),
+    appliedAt: "2026-08-20T00:00:00.000Z",
+  });
+  assert.ok(applied.backupPath);
+  assert.equal(await readFile(path.join(plain, "SKILL.md"), "utf8"), "模板内容\n");
+
+  await rm(root, { recursive: true, force: true });
 });

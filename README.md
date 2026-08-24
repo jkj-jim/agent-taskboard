@@ -22,6 +22,51 @@
 
 应用内的更新走 GitHub Releases：稳定版会自动提示，预发布版只提供手动下载。
 
+## 三套实例共存
+
+同一台机器上可以同时跑三份看板，各有独立数据库、端口和 App Data：
+
+| | 端口 | 数据 | 用途 |
+| --- | --- | --- | --- |
+| 安装版（正式） | 47824 | `~/Library/Application Support/io.github.jkj-jim.agenttaskboard/profiles/production/` | 日常使用，真实任务放这里 |
+| 安装版（预发布） | 47825 | 同上但 `profiles/beta/` | 验发布产物，不碰正式数据也不写共享 skill |
+| `npm start` / `npm run dev` | 47823 | 仓库下的 `.data/` | 开发与调试，数据可以随便删 |
+
+**已经隔离好、不用操心的**：数据库、附件、日志、`taskctl` shim、WorkBuddy 的 MCP 条目（`agent-taskboard` / `agent-taskboard-beta` / `taskboard` 三个名字）。一个看板派发出去的 Agent，它的 `PATH` 里排在最前的是那个看板自己的 shim，shim 又钉住了 `AGENT_TASKBOARD_URL`，所以 Agent 写回的一定是派它出来的那块板子。
+
+**真正共用、需要约定的三件事**：
+
+### 1. Skill 目录
+
+`~/.agents/skills/manage-taskboard`（Codex 与 WorkBuddy 扫描）和 `~/.claude/skills/manage-taskboard`（Claude 扫描）三套实例共用一份。开发机上它们通常是软链，指向仓库的 `skills/manage-taskboard`。
+
+约定：**Skill 的唯一事实源就是仓库工作树，改它走正常的改代码流程。** 不要在安装版里点「应用模板」——那等于把模板逐文件写进被 git 跟踪的文件，表现成一堆没人做过的本地改动。现在这条路已经被挡住了，安装版会返回 `SKILL_POINTS_AT_WORKTREE` 并告诉你去仓库改。
+
+代价是：改了 skill，三套实例的 Agent 立刻都用新的。这在开发期通常正是你想要的；要验「新用户装上后拿到的 skill 长什么样」，用预发布版看差异（它只读），不要在正式版里应用。
+
+### 2. 手敲 `taskctl` 默认打到哪
+
+`taskctl` 不带环境变量时用 `http://127.0.0.1:47823`，也就是**开发实例**。在终端里手敲命令查任务，查的是 dev 的库，不是安装版的。要指向安装版：
+
+```bash
+AGENT_TASKBOARD_URL=http://127.0.0.1:47824 npm run taskctl -- issue list --project <id>
+```
+
+Agent 自己不需要设这个变量，shim 已经钉好了。
+
+### 3. Codex 客户端只有一个
+
+`npm run codex` 起的是带隔离 user-data-dir 的独立 Codex 实例（CDP `9231`）；安装版不自己启动 Codex，而是连接已经在跑且挂了注入器的客户端。所以两个看板会去驱动同一个 Codex 实例——同一时刻只让一个看板派发 Codex 任务。Claude 与 WorkBuddy 没这个限制。
+
+`CODEX_HOME` 三套实例共用且**故意不隔离**：按 profile 覆盖它会让 Codex 回到未登录状态。
+
+### 日常怎么走
+
+- 真实任务放安装版（47824）。开发时的脏数据留在 dev（47823），删掉重来没有代价。
+- 改完代码先在 dev 里跑通，再打包装一次，验安装版的行为。
+- 验发布产物（签名、更新、首次打开）用预发布版，它读不到也写不了正式数据。
+- 发版前 `npm run check`；产物相关的改动另外看 `.github/workflows/macos-verify.yml` 跑出来的结果。
+
 ## 本地运行（开发）
 
 ```bash

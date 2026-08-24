@@ -13,7 +13,9 @@ taskctl project map PROJECT_ID --workspace-path PATH [--json]
 
 Use `--workspace-path` to associate a project with a local repository. `context current` chooses the most specific project whose workspace contains the current directory, then falls back to the `local` project.
 
-Set `CODEX_TASKBOARD_URL` to override the default local API origin, `http://127.0.0.1:47823`.
+Set `AGENT_TASKBOARD_URL` to pick a board explicitly. The legacy name `CODEX_TASKBOARD_URL` is still read; the canonical one wins.
+
+Do not assume a default. A board that launches an Agent puts its own `taskctl` shim first on `PATH` and that shim pins `AGENT_TASKBOARD_URL` to the board that started the work, so an Agent should just run `taskctl` and never set the variable. One machine can run three boards at once — installed app on `47824`, pre-release build on `47825`, `npm start` on `47823` — and they hold separate databases. Setting the variable by hand is how work ends up written to the wrong board.
 
 For a shared cloud board, keep `taskctl` pointed at the loopback companion and configure the upstream HTTPS origin through it:
 

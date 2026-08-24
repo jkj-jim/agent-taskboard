@@ -10,6 +10,25 @@ import path from "node:path";
 export const SKILL_NAME = "manage-taskboard";
 const MARKER_FILE = ".taskboard-skill.json";
 
+/**
+ * 共享 skill 解析后的真实路径是否落在某个 git 工作树里。看 realpath 而不是原路径：
+ * 开发机上这里通常是一条软链，只看原路径永远发现不了它指向仓库。
+ */
+export async function enclosingGitWorktree(skillDirectory) {
+  let current;
+  try {
+    current = await realpath(skillDirectory);
+  } catch {
+    return null; // 还不存在，谈不上落在工作树里
+  }
+  while (true) {
+    if ((await pathState(path.join(current, ".git"))).exists) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 async function pathState(target) {
   try {
     const link = await lstat(target);
@@ -152,6 +171,18 @@ export async function applySkillTemplate({
 }) {
   if (profile !== "production") {
     throw new Error("只有 production 实例可以写入共享 skill");
+  }
+  // 开发机上共享 skill 往往是一条指向仓库工作树的软链（README「三套实例共存」）。
+  // 那种情况下点一次「应用模板」会把模板逐文件写进被 git 跟踪的文件里，
+  // 表现成一堆没人做过的本地改动。宁可拒绝，让开发者直接改仓库。
+  const worktree = await enclosingGitWorktree(skillDirectory);
+  if (worktree) {
+    const error = new Error(
+      `共享 skill 指向 git 工作树 ${worktree}，应用模板会改动被跟踪的文件；`
+      + "开发机请直接在仓库里改 skill 并提交",
+    );
+    error.code = "SKILL_POINTS_AT_WORKTREE";
+    throw error;
   }
   const backupPath = path.join(profileDirectory, "skill-backups", appliedAt.replace(/[:.]/g, "-"));
   const current = await pathState(skillDirectory);
