@@ -40,7 +40,11 @@
 
 `~/.agents/skills/manage-taskboard`（Codex 与 WorkBuddy 扫描）和 `~/.claude/skills/manage-taskboard`（Claude 扫描）三套实例共用一份。开发机上它们通常是软链，指向仓库的 `skills/manage-taskboard`。
 
-约定：**Skill 的唯一事实源就是仓库工作树，改它走正常的改代码流程。** 不要在安装版里点「应用模板」——那等于把模板逐文件写进被 git 跟踪的文件，表现成一堆没人做过的本地改动。现在这条路已经被挡住了，安装版会返回 `SKILL_POINTS_AT_WORKTREE` 并告诉你去仓库改。
+约定：**Skill 的唯一事实源就是仓库工作树，改它走正常的改代码流程。**
+
+看板里有一个「应用模板」的动作，但入口是条件性的：只有当 Claude 发现不了 skill（`~/.claude/skills/manage-taskboard` 不存在或没指向已安装的 skill）时，顶部状态区的 Claude 那一格才会出现「查看 skill 状态」，点开的弹层里才有它。软链正常时根本看不到这个按钮。
+
+一旦走到那一步，在开发机上点它等于把模板逐文件写进被 git 跟踪的文件，表现成一堆没人做过的本地改动。这条路现在被挡住了：`applySkillTemplate` 解析 realpath 后向上找 `.git`，命中就返回 `SKILL_POINTS_AT_WORKTREE`，让你回仓库改。
 
 代价是：改了 skill，三套实例的 Agent 立刻都用新的。这在开发期通常正是你想要的；要验「新用户装上后拿到的 skill 长什么样」，用预发布版看差异（它只读），不要在正式版里应用。
 
