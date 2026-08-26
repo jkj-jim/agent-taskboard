@@ -4,7 +4,8 @@
   "version": "0.1.2",
   "identifier": "io.github.jkj-jim.agenttaskboard",
   "build": {
-    "frontendDist": "shell"
+    "frontendDist": "shell",
+    "beforeBuildCommand": "npm run build:web"
   },
   "app": {
     "windows": [],

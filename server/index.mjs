@@ -42,6 +42,7 @@ async function main() {
         skillDirectory: path.dirname(options.skillPath),
         templateDirectory: path.join(PROJECT_ROOT, "skills", "manage-taskboard"),
         claudeHome: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"),
+        codexHome: process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
         appVersion: options.appVersion,
         installedAt: new Date().toISOString(),
       });

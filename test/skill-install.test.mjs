@@ -269,3 +269,37 @@ test("applying the template refuses to write into a git working tree", async () 
 
   await rm(root, { recursive: true, force: true });
 });
+
+test("a fresh install links both Claude and Codex at the shared skill", async () => {
+  const { ensureSkillInstalled } = await import("../server/agents/skill-install.mjs");
+  const root = await mkdtemp(path.join(os.tmpdir(), "skill-fresh-"));
+  const skillDirectory = path.join(root, "agents", "skills", "manage-taskboard");
+  const template = path.join(root, "template");
+  await mkdir(template, { recursive: true });
+  await writeFile(path.join(template, "SKILL.md"), "模板\n");
+
+  const install = () => ensureSkillInstalled({
+    profile: "production",
+    skillDirectory,
+    templateDirectory: template,
+    claudeHome: path.join(root, ".claude"),
+    codexHome: path.join(root, ".codex"),
+    appVersion: "9.9.9",
+    installedAt: "2026-08-26T00:00:00.000Z",
+  });
+
+  const first = await install();
+  // Codex 只扫自己的 skills 目录时也要能发现；赌它认共享目录不如多建一条软链
+  assert.deepEqual(first.changes.toSorted(), ["installed-skill", "linked-claude", "linked-codex"]);
+  assert.equal(first.claudeLink.state, "linked");
+  assert.equal(first.codexLink.state, "linked");
+  for (const home of [".claude", ".codex"]) {
+    const entry = path.join(root, home, "skills", "manage-taskboard", "SKILL.md");
+    assert.equal(await readFile(entry, "utf8"), "模板\n", `${home} 侧读不到 SKILL.md`);
+  }
+
+  // 幂等：再跑一次什么都不做
+  assert.deepEqual((await install()).changes, []);
+
+  await rm(root, { recursive: true, force: true });
+});

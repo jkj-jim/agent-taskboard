@@ -17,6 +17,7 @@
     "codex:verify-profile": "node scripts/verify-codex-profile-login.mjs",
     "sidecar:node": "node scripts/fetch-node-sidecar.mjs",
     "verify:updater-key": "node scripts/verify-updater-keypair.mjs",
+    "app:build": "npx tauri build --bundles app",
     "sync:version": "node scripts/sync-app-version.mjs",
     "workbuddy": "node scripts/workbuddy.mjs",
     "dev": "node scripts/dev.mjs",

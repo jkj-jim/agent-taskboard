@@ -1,8 +1,9 @@
 // 默认 skill 的安装与发现（document/design/desktop-app-packaging.md §7）。
 //
-// 权威目录只有一个：~/.agents/skills/manage-taskboard。Codex 与 WorkBuddy 用它们
-// 自己的默认发现机制，只有 Claude Code 需要一条软链。skill 是三套实例的共享例外，
-// 所以写权限只给 production：beta 一律只读，连冲突都只报不改。
+// 权威目录只有一个：~/.agents/skills/manage-taskboard。Claude Code 与 Codex 各自
+// 只扫自己的 skills 目录，所以两边都建一条指向它的软链——Codex 的应用包里
+// ~/.codex/skills 与 ~/.agents/skills 都出现过，赌它认共享目录不如多建一条。
+// skill 是三套实例的共享例外，写权限只给 production：beta 一律只读，连冲突都只报不改。
 
 import { cp, lstat, mkdir, readFile, readlink, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -59,33 +60,37 @@ async function readMarker(skillDirectory) {
   }
 }
 
+async function describeLink(skillsRoot, skillDirectory) {
+  const linkPath = path.join(skillsRoot, SKILL_NAME);
+  const state = await pathState(linkPath);
+  if (!state.exists) return { state: "missing", path: linkPath, target: null };
+  if (await samePath(linkPath, skillDirectory)) {
+    return { state: "linked", path: linkPath, target: state.target };
+  }
+  // 已经被别的东西占着：先展示冲突，绝不静默删除用户的目录或软链。
+  return { state: "conflict", path: linkPath, target: state.target };
+}
+
 /**
  * 只读地看一眼现状。安装与否、软链是否正确，都由这里回答，
  * 写入路径和 UI 都用同一份判断。
  */
-export async function inspectSkillInstallation({ skillDirectory, claudeHome }) {
+export async function inspectSkillInstallation({ skillDirectory, claudeHome, codexHome }) {
   const installedState = await pathState(skillDirectory);
   const installed = installedState.exists
     && await stat(path.join(skillDirectory, "SKILL.md")).then(() => true, () => false);
-
-  const claudeLinkPath = path.join(claudeHome, "skills", SKILL_NAME);
-  const claudeState = await pathState(claudeLinkPath);
-  let claudeLink;
-  if (!claudeState.exists) {
-    claudeLink = { state: "missing", path: claudeLinkPath, target: null };
-  } else if (await samePath(claudeLinkPath, skillDirectory)) {
-    claudeLink = { state: "linked", path: claudeLinkPath, target: claudeState.target };
-  } else {
-    // 已经被别的东西占着：先展示冲突，绝不静默删除用户的目录或软链。
-    claudeLink = { state: "conflict", path: claudeLinkPath, target: claudeState.target };
-  }
 
   return {
     skillDirectory,
     installed,
     isSymlink: installedState.symlink,
     marker: await readMarker(skillDirectory),
-    claudeLink,
+    claudeLink: await describeLink(path.join(claudeHome, "skills"), skillDirectory),
+    // Codex 两个位置都引用过（~/.codex/skills 与 ~/.agents/skills），到底扫哪个
+    // 没有可靠依据。多建一条软链是幂等的，比赌它认共享目录便宜得多。
+    codexLink: codexHome
+      ? await describeLink(path.join(codexHome, "skills"), skillDirectory)
+      : null,
   };
 }
 
@@ -103,8 +108,8 @@ export async function stageSkillTemplate({ profileDirectory, templateDirectory, 
 }
 
 /**
- * 「目录在」不等于「Agent 能发现」：Claude 走 ~/.claude/skills，Codex 与 WorkBuddy
- * 走 ~/.agents/skills。这里按 Agent 各自真正扫描的位置判断（§7）。
+ * 「目录在」不等于「Agent 能发现」：Claude 扫 ~/.claude/skills，Codex 扫
+ * ~/.codex/skills（也引用过 ~/.agents/skills）。这里按 Agent 各自真正扫描的位置判断（§7）。
  */
 export async function isSkillDiscoverable({ skillsRoot }) {
   const entry = path.join(skillsRoot, SKILL_NAME, "SKILL.md");
@@ -204,10 +209,11 @@ export async function ensureSkillInstalled({
   skillDirectory,
   templateDirectory,
   claudeHome,
+  codexHome,
   appVersion,
   installedAt,
 }) {
-  const before = await inspectSkillInstallation({ skillDirectory, claudeHome });
+  const before = await inspectSkillInstallation({ skillDirectory, claudeHome, codexHome });
   if (profile !== "production") {
     // beta 不得写共享 skill、软链或 .taskboard-skill.json（§7）。
     return { ...before, writable: false, changes: [] };
@@ -224,15 +230,19 @@ export async function ensureSkillInstalled({
     changes.push("installed-skill");
   }
 
-  if (before.claudeLink.state === "missing") {
-    await mkdir(path.dirname(before.claudeLink.path), { recursive: true });
+  for (const [link, change] of [
+    [before.claudeLink, "linked-claude"],
+    [before.codexLink, "linked-codex"],
+  ]) {
+    if (link?.state !== "missing") continue;
+    await mkdir(path.dirname(link.path), { recursive: true });
     const { symlink } = await import("node:fs/promises");
-    await symlink(skillDirectory, before.claudeLink.path);
-    changes.push("linked-claude");
+    await symlink(skillDirectory, link.path);
+    changes.push(change);
   }
 
   return {
-    ...(await inspectSkillInstallation({ skillDirectory, claudeHome })),
+    ...(await inspectSkillInstallation({ skillDirectory, claudeHome, codexHome })),
     writable: true,
     changes,
   };

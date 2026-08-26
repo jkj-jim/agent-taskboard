@@ -7,7 +7,15 @@ description: 管理 Taskboard 的项目、任务、任务关系和评论，操�
 
 本文件规定流程规则。**操作层用哪一种，取决于当前可用的能力**：
 
-- 如果可以调用 `taskboard` 的 MCP 工具（工具名形如 `taskboard_get_task`、`taskboard_list_tasks`、`taskboard_add_comment`、`taskboard_move_task`），**全程只用这些工具**：不要查找、安装或运行任何命令行工具，也不要读取 [references/cli.md](references/cli.md)（它只描述命令行）。改状态的 `move_task` 必须带 `expectedVersion`，值取自最近一次 `get_task`。
+- 如果能调用看板的 MCP 工具，**全程只用这些工具**：不要查找、安装或运行任何命令行工具，也不要读取 [references/cli.md](references/cli.md)（它只描述命令行）。改状态的 `move_task` 必须带 `expectedVersion`，值取自最近一次 `get_task`。
+
+  工具名是「MCP 服务名 + 下划线 + 操作」，例如服务名为 `agent-taskboard` 时是 `agent-taskboard_get_task`。**服务名按这个顺序确定，不要凭工具名眼熟就选**：
+
+  1. 启动指令里点名的服务名。有它就只用它。
+  2. 没有启动指令时用 `agent-taskboard`，那是安装版正式看板。
+  3. 只有在前两条都不可用时，才考虑别的看板服务；`agent-taskboard-beta` 是预发布版，`taskboard` 是开发实例，两者的数据都不是正式数据。
+
+  同一个客户端里可能同时注册着这三个看板，它们的数据各自独立。选错服务名不会报错，只会把工作写进另一块看板。
 - 否则使用 `taskctl` 命令行。常用命令如下：
 
 ```bash

@@ -2127,7 +2127,11 @@ export function createTaskboardServer(options = {}) {
         // 这条只读接口不值得让界面无限等：文件系统探测卡住时如实报超时。
         const [installation, diff] = await withDeadline(
           Promise.all([
-            inspectSkillInstallation({ skillDirectory, claudeHome: resolved.claudeHome }),
+            inspectSkillInstallation({
+              skillDirectory,
+              claudeHome: resolved.claudeHome,
+              codexHome: resolved.codexHome,
+            }),
             diffSkillAgainstTemplate({ skillDirectory, templateDirectory }),
           ]),
           5_000,
@@ -2790,6 +2794,13 @@ export function createTaskboardServer(options = {}) {
           }
           try {
             taskctlRuntime.initialize(`http://127.0.0.1:${address.port}`);
+            // 立刻把 shim 写出来，不等第一次派发任务。用户自己在 Codex / Claude
+            // 里开会话时，skill 会按绝对路径去找这个 shim；懒生成意味着「装完还没
+            // 从看板派发过任务」的机器上那条路径根本不存在，Agent 直接没工具可用。
+            // 写失败不影响服务启动：看板自己派发时还会再试一次。
+            taskctlRuntime.ensureReady().catch((error) => {
+              console.warn(`taskctl shim 预生成失败，首次派发任务时会重试：${error.message}`);
+            });
             resolve();
           } catch (error) {
             reject(error);
