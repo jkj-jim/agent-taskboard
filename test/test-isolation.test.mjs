@@ -25,3 +25,25 @@ test("every server fixture pins the agent runtime instead of probing this machin
 
   assert.deepEqual(leaking, []);
 });
+
+test("no test waits by counting attempts instead of by deadline", async () => {
+  // 固定次数不等于限时：实际时限是「次数 ×（每次请求耗时 + 间隔）」，机器一忙就漂移。
+  // 更坑的是循环条件容易和断言错位——ai-chat-server 里那次就是：循环等到「会话行出现」
+  // 就退出，断言却要「会话已绑定对话记录」，而这是两次独立写入，中间那个窗口一命中
+  // 就立刻失败，预算还剩一大半。改用 test/helpers/wait-for.mjs 的墙钟等待。
+  const self = path.basename(fileURLToPath(import.meta.url));
+  const files = (await readdir(testDirectory))
+    .filter((name) => name.endsWith(".test.mjs") && name !== self);
+  const offenders = [];
+
+  for (const name of files) {
+    const source = await readFile(path.join(testDirectory, name), "utf8");
+    for (const [index, line] of source.split("\n").entries()) {
+      if (/for\s*\(let\s+attempts?\s*=\s*0;\s*attempts?\s*<\s*\d+/.test(line)) {
+        offenders.push(`${name}:${index + 1}`);
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, []);
+});

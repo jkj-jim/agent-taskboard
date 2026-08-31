@@ -9,16 +9,7 @@ import { AiChatService } from "../server/ai-chat.mjs";
 import { createAgentRegistry } from "../server/agents/index.mjs";
 import { normalizeCodexEvent } from "../server/ai-chat-process.mjs";
 import { SKILL_MARKER } from "../server/agents/prompt.mjs";
-
-async function waitFor(predicate, timeout = 4_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const value = await predicate();
-    if (value) return value;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error("Timed out waiting for condition");
-}
+import { waitFor } from "./helpers/wait-for.mjs";
 
 test("normalized item events retain a bounded public item id", () => {
   const itemId = "x".repeat(70_000);
@@ -323,7 +314,7 @@ test("parser and event callback failures kill a SIGTERM-resistant process group"
       await rm(fixture.descendantPath, { force: true });
       const thread = await fixture.service.createThread({ projectId: "project" });
       const run = await fixture.service.startTurn(thread.id, { message });
-      await waitFor(() => fixture.service.getRun(run.id).status === "failed", 700);
+      await waitFor(() => fixture.service.getRun(run.id).status === "failed", { timeoutMs: 700 });
       assert.equal(fixture.service.getRun(run.id).error, expectedError);
       await new Promise((resolve) => setTimeout(resolve, 350));
       await assert.rejects(readFile(fixture.descendantPath), (error) => error.code === "ENOENT");

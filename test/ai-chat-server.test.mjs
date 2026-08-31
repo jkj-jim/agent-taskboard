@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { createTaskboardServer } from "../server/index.mjs";
 import { SKILL_MARKER } from "../server/agents/prompt.mjs";
 import { readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
+import { waitFor } from "./helpers/wait-for.mjs";
 
 const execFile = promisify(execFileCallback);
 
@@ -622,14 +623,12 @@ test("detail-style patches leave Codex for native launch while Claude keeps its 
     assert.equal(edited.body.agentStart, undefined);
     // The board ran this one itself, so its session points at a transcript once
     // the turn reports the id back.
-    let claudeSession;
-    for (let attempt = 0; attempt < 100 && !claudeSession; attempt += 1) {
+    const claudeSession = await waitFor(async () => {
       const reread = await request(fixture.baseUrl, `/api/tasks/${alreadyActive.body.task.id}`);
-      claudeSession = (reread.body.task.agentSessions ?? [])
-        .find((session) => session.agentKind === "claude");
-      if (!claudeSession) await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.ok(claudeSession?.chatThreadId);
+      return (reread.body.task.agentSessions ?? [])
+        .find((session) => session.agentKind === "claude" && session.chatThreadId);
+    }, { label: `任务 ${alreadyActive.body.task.id} 的 Claude 会话绑定到对话记录` });
+    assert.ok(claudeSession.chatThreadId);
   } finally {
     await fixture.close();
   }
