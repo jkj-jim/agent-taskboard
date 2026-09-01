@@ -30,12 +30,16 @@ import { readCodexQuotaStatus } from "./codex-rate-limits.mjs";
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
 const defaultCodexDebuggingPort = DEFAULT_CODEX_DEBUGGING_PORT;
-const launcherCodexUserDataPath = path.join(projectRoot, ".data", "codex-user-data");
+// 装到 /Applications 后 projectRoot 落在只读的 app bundle 里，启动器自己的可写状态
+// 必须挪到调用方指定的目录（安装版给的是 profile 数据目录）。
+const launcherStatePath = readEnv("CODEX_LAUNCHER_DIR")?.trim()
+  || path.join(projectRoot, ".data");
+const launcherCodexUserDataPath = path.join(launcherStatePath, "codex-user-data");
 const injectionPath = path.join(projectRoot, "inject", "codex-taskboard.user.js");
 // 入口决定这次注入是否带可见面板：安装版只加载 automation，开发命令再叠加 panel（§3）。
 const automationEntryPath = path.join(projectRoot, "inject", "codex-automation.user.js");
 const panelEntryPath = path.join(projectRoot, "inject", "codex-taskboard-panel.user.js");
-const automationPoliciesPath = path.join(projectRoot, ".data", "codex-automation-policies.json");
+const automationPoliciesPath = path.join(launcherStatePath, "codex-automation-policies.json");
 const taskboardOrigin = `http://127.0.0.1:${resolvePort()}`;
 const taskboardHealthUrl = `${taskboardOrigin}/health`;
 const taskboardPageUrl = `${taskboardOrigin}/?host=codex`;
@@ -69,6 +73,12 @@ function parseArgs(argv) {
     attachExisting: false,
     // 安装版的加载方式：只注入 automation bridge，不挂任何可见面板（§3）。
     automationOnly: false,
+    // Codex 没在跑时用它自己的用户目录拉起，得到的就是用户平时那个 Codex，只有一个
+    // 窗口；已经在跑时仍然隔离，因为 Electron 的单实例锁不允许事后加调试端口。
+    // 用共享目录拉起的实例退出时不关闭——那是用户的 Codex，不是本命令的产物。
+    sharedProfile: false,
+    // 服务由调用方自己保证（安装版的 sidecar 就是它），启动器不再代管。
+    supervise: true,
     startupToken: null,
     daemon: false,
     screenshot: null,
@@ -84,6 +94,8 @@ function parseArgs(argv) {
     else if (arg === "--refresh-if-running") options.refreshIfRunning = true;
     else if (arg === "--attach-existing") options.attachExisting = true;
     else if (arg === "--automation-only") options.automationOnly = true;
+    else if (arg === "--shared-profile") options.sharedProfile = true;
+    else if (arg === "--no-supervisor") options.supervise = false;
     else if (arg === "--startup-token") {
       options.startupToken = argv[++index];
       if (!/^[a-z0-9-]{1,100}$/i.test(options.startupToken || "")) {
@@ -136,7 +148,7 @@ function startTaskboard({ detached }) {
   });
 }
 
-function createTaskboardSupervisor({ detached }) {
+function createTaskboardSupervisor({ detached, supervise = true }) {
   let child = null;
   let ensureInFlight = null;
   let retryAfter = 0;
@@ -146,6 +158,9 @@ function createTaskboardSupervisor({ detached }) {
     if (await isReachable(taskboardHealthUrl)) {
       return { status: "ok", restarted: false };
     }
+    // 服务归调用方管时只报状态，绝不自己再起一个——安装版那边 sidecar 才是权威，
+    // 从 app bundle 里另起一个进程会和它抢同一个端口与同一份 SQLite。
+    if (!supervise) throw new Error(`Taskboard is not answering on ${taskboardHealthUrl}`);
     if (ensureInFlight) return ensureInFlight;
     if (!force && Date.now() < retryAfter) {
       throw new Error("Taskboard restart is waiting before its next attempt");
@@ -197,25 +212,44 @@ function createTaskboardSupervisor({ detached }) {
   return { ensure, stop };
 }
 
-async function launchCodex(appPath, port) {
-  await mkdir(launcherCodexUserDataPath, { recursive: true });
+/** 主进程在不在决定能不能借用户自己的 Electron 目录：单实例锁只认主进程。 */
+function codexClientRunning(appPath) {
+  const executableName = path.basename(appPath, path.extname(appPath));
+  const mainExecutable = path.join(appPath, "Contents", "MacOS", executableName);
+  const processes = spawnSync("/bin/ps", ["-axo", "command="], {
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (processes.status !== 0) return true;
+  return processes.stdout.split("\n").some((command) => command.startsWith(mainExecutable));
+}
+
+/**
+ * `isolated` 为 false 时用 Codex 自己的用户目录启动，拉起来的就是用户平时那个
+ * Codex；这只在它没有运行时可行，否则单实例锁会把新进程转发给已有实例，端口开不出来。
+ */
+async function launchCodex(appPath, port, { isolated = true } = {}) {
+  if (isolated) await mkdir(launcherCodexUserDataPath, { recursive: true });
   const executableName = path.basename(appPath, path.extname(appPath));
   const executablePath = path.join(appPath, "Contents", "MacOS", executableName);
-  return spawn(executablePath, [
-    `--user-data-dir=${launcherCodexUserDataPath}`,
+  const child = spawn(executablePath, [
+    ...(isolated ? [`--user-data-dir=${launcherCodexUserDataPath}`] : []),
     `--remote-debugging-port=${port}`,
     `--remote-allow-origins=http://127.0.0.1:${port}`,
   ], {
     detached: true,
-    env: {
-      ...process.env,
-      CODEX_ELECTRON_USER_DATA_PATH: launcherCodexUserDataPath,
-    },
+    env: isolated
+      ? { ...process.env, CODEX_ELECTRON_USER_DATA_PATH: launcherCodexUserDataPath }
+      : process.env,
     stdio: "ignore",
   });
+  // 借来的实例不归本命令所有，退出时不能连它一起关掉。
+  child.taskboardOwned = isolated;
+  return child;
 }
 
 function stopLaunchedCodex(child) {
+  if (child?.taskboardOwned === false) return;
   if (child?.exitCode === null && !child.killed) child.kill("SIGTERM");
 }
 
@@ -645,116 +679,170 @@ async function prefillTaskComposerViaCdp(cdp, executionContextId, request) {
     skillName,
     skillPath,
   } = request;
-  const deadline = Date.now() + 8_000;
+  // 同一个 Skill 可能同时出现在多个被扫描的目录里（实测 Codex 会同时列出
+  // `~/.agents/skills` 和 `~/.codex/skills` 各一份），补全下拉因此有多个同名候选，
+  // 而按钮上没有任何能分辨路径的属性。所以只能挨个试：选一个、看落下来的 mention
+  // 指向哪份、不对就换下一个。高亮那项先试，它是用户直接回车会得到的那份。
+  const CANDIDATE_ATTEMPTS = 4;
+  let deadline = Date.now() + 8_000;
+
+  const readEditorState = async () => (await cdp.send("Runtime.evaluate", {
+    expression: `(() => {
+      const instruction = ${JSON.stringify(instruction)};
+      const skillName = ${JSON.stringify(skillName)};
+      const skillPath = ${JSON.stringify(skillPath)};
+      const editor = Array.from(document.querySelectorAll(
+        '[data-codex-composer="true"][contenteditable="true"]'
+      )).find((candidate) => candidate.getClientRects().length > 0);
+      if (!editor) return { ready: false };
+      const mention = Array.from(editor.querySelectorAll("[skill-mention-name]"))
+        .find((candidate) => (
+          candidate.getAttribute("skill-mention-name") === skillName
+          && candidate.getAttribute("skill-mention-path") === skillPath
+        ));
+      if (mention && (editor.textContent || "").includes(instruction)) {
+        return { ready: true, matches: true };
+      }
+      editor.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return { ready: true, matches: false };
+    })()`,
+    contextId: executionContextId,
+    returnByValue: true,
+  })).result.value;
+
   while (Date.now() < deadline) {
-    const prepared = await cdp.send("Runtime.evaluate", {
-      expression: `(() => {
-        const instruction = ${JSON.stringify(instruction)};
-        const skillName = ${JSON.stringify(skillName)};
-        const skillPath = ${JSON.stringify(skillPath)};
-        const editor = Array.from(document.querySelectorAll(
-          '[data-codex-composer="true"][contenteditable="true"]'
-        )).find((candidate) => candidate.getClientRects().length > 0);
-        if (!editor) return { ready: false };
-        const mention = Array.from(editor.querySelectorAll("[skill-mention-name]"))
-          .find((candidate) => (
-            candidate.getAttribute("skill-mention-name") === skillName
-            && candidate.getAttribute("skill-mention-path") === skillPath
-          ));
-        if (mention && (editor.textContent || "").includes(instruction)) {
-          return { ready: true, matches: true };
-        }
-        editor.focus();
-        const selection = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(editor);
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-        return { ready: true, matches: false };
-      })()`,
-      contextId: executionContextId,
-      returnByValue: true,
-    });
-    if (!prepared.result.value?.ready) {
+    const prepared = await readEditorState();
+    if (!prepared?.ready) {
       await new Promise((resolve) => setTimeout(resolve, 80));
       continue;
     }
-    if (prepared.result.value.matches) return { prefilled: true };
-
-    await cdp.send("Input.insertText", { text: `$${skillName}` });
+    if (prepared.matches) return { prefilled: true };
     break;
   }
 
-  let selectedSkill = false;
-  while (Date.now() < deadline) {
-    const selection = await cdp.send("Runtime.evaluate", {
-      expression: `(() => {
-        const overlay = Array.from(document.querySelectorAll(
-          '[data-composer-overlay-floating-ui="true"]'
-        )).find((candidate) => candidate.getClientRects().length > 0);
-        if (!overlay) return { ready: false };
-        const buttons = Array.from(overlay.querySelectorAll(
-          'button[data-list-navigation-item="true"]'
-        ));
-        const button = buttons.find((candidate) => candidate.getAttribute("aria-selected") === "true")
-          || (buttons.length === 1 ? buttons[0] : null);
-        if (!button) return { ready: true, found: false };
-        button.click();
-        return { ready: true, found: true };
-      })()`,
-      contextId: executionContextId,
-      returnByValue: true,
-    });
-    if (selection.result.value?.found) {
-      selectedSkill = true;
-      break;
+  /** 选中下拉里第 `index` 个候选（0 优先取高亮项），返回落下来的 mention 路径。 */
+  async function selectCandidate(index) {
+    await cdp.send("Input.insertText", { text: `$${skillName}` });
+
+    const clickDeadline = Date.now() + 4_000;
+    let overlay = null;
+    while (Date.now() < clickDeadline) {
+      overlay = (await cdp.send("Runtime.evaluate", {
+        expression: `(() => {
+          const index = ${index};
+          const overlay = Array.from(document.querySelectorAll(
+            '[data-composer-overlay-floating-ui="true"]'
+          )).find((candidate) => candidate.getClientRects().length > 0);
+          if (!overlay) return { ready: false };
+          const buttons = Array.from(overlay.querySelectorAll(
+            'button[data-list-navigation-item="true"]'
+          ));
+          if (buttons.length === 0) return { ready: false };
+          // Codex 标记高亮项用的是 aria-current，aria-selected 是旧写法，两个都认。
+          const highlighted = buttons.findIndex((candidate) => (
+            candidate.getAttribute("aria-current") === "true"
+            || candidate.getAttribute("aria-selected") === "true"
+          ));
+          const order = highlighted === -1
+            ? buttons.map((_, position) => position)
+            : [highlighted, ...buttons.map((_, position) => position).filter((position) => position !== highlighted)];
+          const target = buttons[order[index]];
+          const labels = buttons.map((candidate) => (candidate.innerText || "")
+            .replace(/\s+/g, " ").trim().slice(0, 60));
+          if (!target) return { ready: true, clicked: false, count: buttons.length, labels };
+          target.click();
+          return { ready: true, clicked: true, count: buttons.length, labels };
+        })()`,
+        contextId: executionContextId,
+        returnByValue: true,
+      })).result.value;
+      if (overlay?.ready) break;
+      await new Promise((resolve) => setTimeout(resolve, 80));
     }
-    await new Promise((resolve) => setTimeout(resolve, 80));
-  }
-  if (!selectedSkill) {
-    throw new Error(`Timed out while selecting the ${skillName} Skill`);
+    if (!overlay?.ready) return { status: "no-overlay" };
+    if (!overlay.clicked) {
+      return { status: "exhausted", count: overlay.count, labels: overlay.labels };
+    }
+
+    const mentionDeadline = Date.now() + 4_000;
+    while (Date.now() < mentionDeadline) {
+      const mention = (await cdp.send("Runtime.evaluate", {
+        expression: `(() => {
+          const skillName = ${JSON.stringify(skillName)};
+          const editor = Array.from(document.querySelectorAll(
+            '[data-codex-composer="true"][contenteditable="true"]'
+          )).find((candidate) => candidate.getClientRects().length > 0);
+          if (!editor) return { ready: false };
+          const selected = Array.from(editor.querySelectorAll("[skill-mention-name]"))
+            .find((candidate) => candidate.getAttribute("skill-mention-name") === skillName);
+          return {
+            ready: Boolean(selected),
+            selectedPath: selected?.getAttribute("skill-mention-path") ?? null,
+          };
+        })()`,
+        contextId: executionContextId,
+        returnByValue: true,
+      })).result.value;
+      if (mention?.ready) {
+        return {
+          status: mention.selectedPath === skillPath ? "matched" : "mismatch",
+          selectedPath: mention.selectedPath,
+          count: overlay.count,
+          labels: overlay.labels,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    return { status: "no-mention", count: overlay.count, labels: overlay.labels };
   }
 
   let mentionReady = false;
-  while (Date.now() < deadline) {
-    const mention = await cdp.send("Runtime.evaluate", {
-      expression: `(() => {
-        const skillName = ${JSON.stringify(skillName)};
-        const skillPath = ${JSON.stringify(skillPath)};
-        const editor = Array.from(document.querySelectorAll(
-          '[data-codex-composer="true"][contenteditable="true"]'
-        )).find((candidate) => candidate.getClientRects().length > 0);
-        if (!editor) return { ready: false };
-        const selected = Array.from(editor.querySelectorAll("[skill-mention-name]"))
-          .find((candidate) => candidate.getAttribute("skill-mention-name") === skillName);
-        return {
-          ready: Boolean(selected),
-          pathMatches: selected?.getAttribute("skill-mention-path") === skillPath,
-          selectedPath: selected?.getAttribute("skill-mention-path") ?? null,
-        };
-      })()`,
-      contextId: executionContextId,
-      returnByValue: true,
-    });
-    if (mention.result.value?.ready) {
-      if (!mention.result.value.pathMatches) {
-        // Another copy of the same skill shadows this checkout — usually a
-        // global one synced by an installed Taskboard app. Name both paths,
-        // because the fix is to remove or update the copy Codex picked.
-        throw new Error(
-          `Codex selected a different ${skillName} Skill: `
-          + `${mention.result.value.selectedPath ?? "未知路径"}（本看板使用 ${skillPath}）。`
-          + "请删除或更新那份重复的 Skill，或退出正在运行的 Taskboard 应用。",
-        );
-      }
+  const rejectedPaths = [];
+  let lastAttempt = null;
+  for (let index = 0; index < CANDIDATE_ATTEMPTS; index += 1) {
+    if (index > 0) {
+      // 换候选前要把上一次落下的 mention 清掉，否则新的会追加在它后面。
+      const reset = await readEditorState();
+      if (!reset?.ready) break;
+    }
+    lastAttempt = await selectCandidate(index);
+    if (lastAttempt.status === "matched") {
       mentionReady = true;
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    if (lastAttempt.status === "mismatch") {
+      rejectedPaths.push(lastAttempt.selectedPath ?? "未知路径");
+      if (lastAttempt.count !== undefined && index + 1 >= lastAttempt.count) break;
+      continue;
+    }
+    break;
   }
+
   if (!mentionReady) {
-    throw new Error(`Timed out while creating the ${skillName} Skill mention`);
+    if (rejectedPaths.length > 0) {
+      // 试遍了下拉里所有同名候选都不是本看板要的那份。把试过的路径全列出来，
+      // 否则用户只知道「选错了」，不知道机器上到底有几份、分别在哪。
+      throw new Error(
+        `Codex 里的 ${skillName} Skill 都不是本看板使用的那份：`
+        + `试过 ${rejectedPaths.join("、")}，本看板使用 ${skillPath}。`
+        + "请删掉多余的那几份，或让看板与它们指向同一份。",
+      );
+    }
+    if (lastAttempt?.status === "exhausted" || lastAttempt?.status === "no-mention") {
+      throw new Error(
+        `Timed out while selecting the ${skillName} Skill`
+        + `（下拉里有 ${lastAttempt.count} 项：${(lastAttempt.labels ?? []).join(" / ")}）`,
+      );
+    }
+    throw new Error(`Timed out while selecting the ${skillName} Skill（补全下拉一直没有出现）`);
   }
+  // mention 落定后重新计时，让写正文这一步拿到完整预算。
+  deadline = Date.now() + 8_000;
 
   await cdp.send("Input.insertText", { text: instruction });
   while (Date.now() < deadline) {
@@ -1167,7 +1255,10 @@ async function main() {
   }
 
   let codexProcess = null;
-  const supervisor = createTaskboardSupervisor({ detached: !options.watch });
+  const supervisor = createTaskboardSupervisor({
+    detached: !options.watch,
+    supervise: options.supervise,
+  });
 
   try {
     const cdpReachable = await isReachable(cdpVersionUrl);
@@ -1180,7 +1271,8 @@ async function main() {
     await supervisor.ensure({ force: true });
 
     if (!cdpReachable) {
-      codexProcess = await launchCodex(options.appPath, options.port);
+      const isolated = !options.sharedProfile || codexClientRunning(options.appPath);
+      codexProcess = await launchCodex(options.appPath, options.port, { isolated });
       await waitForLaunchedCodex(codexProcess, cdpVersionUrl, 30_000);
     }
 

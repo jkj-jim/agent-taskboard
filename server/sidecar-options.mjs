@@ -1,6 +1,6 @@
-// Tauri 壳启动 sidecar 时传入的十个参数（document/design/desktop-app-packaging.md §4）。
+// Tauri 壳启动 sidecar 时传入的十一个参数（document/design/desktop-app-packaging.md §4）。
 // 优先级固定为：CLI 参数 > AGENT_TASKBOARD_*（旧名 CODEX_TASKBOARD_* 仍认）> 开发版默认值。
-// 安装版（带 --profile）必须显式传满十个，缺任何一个都立即报错，绝不回退到 PROJECT_ROOT。
+// 安装版（带 --profile）必须显式传满十一个，缺任何一个都立即报错，绝不回退到 PROJECT_ROOT。
 
 import path from "node:path";
 
@@ -42,6 +42,12 @@ export const SIDECAR_PARAMETERS = [
     key: "taskctlCliPath",
     kind: "path",
     env: "TASKCTL_CLI_PATH",
+  },
+  {
+    flag: "--codex-injector-path",
+    key: "codexInjectorPath",
+    kind: "path",
+    env: "CODEX_INJECTOR_PATH",
   },
 ];
 
@@ -135,7 +141,7 @@ export function parseSidecarArgv(argv, {
       .map((parameter) => parameter.flag);
     if (missing.length > 0) {
       throw new Error(
-        `安装版启动必须显式传入全部十个参数，缺少：${missing.join(", ")}；`
+        `安装版启动必须显式传入全部十一个参数，缺少：${missing.join(", ")}；`
         + "缺失时不回退到仓库路径。",
       );
     }
@@ -165,6 +171,9 @@ export function parseSidecarArgv(argv, {
       skillPath: resolved.skillPath
         ?? path.join(projectRoot, "skills", "manage-taskboard", "SKILL.md"),
       taskctlCliPath: resolved.taskctlCliPath ?? path.join(projectRoot, "cli", "taskctl.mjs"),
+      // 看板自己拉起 Codex 桥接时要跑的注入器；安装版指向 Resources/scripts。
+      codexInjectorPath: resolved.codexInjectorPath
+        ?? path.join(projectRoot, "scripts", "codex-injector.mjs"),
     },
   };
 }

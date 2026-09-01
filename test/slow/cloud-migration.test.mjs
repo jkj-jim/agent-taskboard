@@ -25,13 +25,13 @@ import {
   readCloudMigrationBundle,
   runCli,
   writeCloudMigrationBundle,
-} from "../scripts/migrate-to-cloud.mjs";
-import { createCloudWorkerHarness } from "./helpers/cloud-worker-harness.mjs";
+} from "../../scripts/migrate-to-cloud.mjs";
+import { createCloudWorkerHarness } from "../helpers/cloud-worker-harness.mjs";
 
 const fixtures = [];
 const timestamp = "2026-07-24T12:00:00.000Z";
 const execFile = promisify(execFileCallback);
-const projectRoot = path.resolve(import.meta.dirname, "..");
+const projectRoot = path.resolve(import.meta.dirname, "..", "..");
 const wranglerExecutable = path.join(projectRoot, "node_modules", ".bin", "wrangler");
 const wranglerConfig = path.join(projectRoot, "wrangler.jsonc");
 
@@ -964,7 +964,7 @@ test("Wrangler adapter requires remote opt-in and keeps transfer files private",
   const {
     createCloudMigrationAdapters,
     createWranglerCloudAdapters,
-  } = await import("../scripts/wrangler-cloud-adapter.mjs");
+  } = await import("../../scripts/wrangler-cloud-adapter.mjs");
   assert.throws(
     () => createWranglerCloudAdapters({
       remote: true,
@@ -1047,7 +1047,7 @@ test("Wrangler adapter requires remote opt-in and keeps transfer files private",
 test("one-time Wrangler adapter migrates and verifies local persistence without remote access", async () => {
   const {
     createWranglerCloudAdapters,
-  } = await import("../scripts/wrangler-cloud-adapter.mjs");
+  } = await import("../../scripts/wrangler-cloud-adapter.mjs");
   assert.throws(
     () => createWranglerCloudAdapters({
       remote: true,

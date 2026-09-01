@@ -88,11 +88,17 @@ export function TaskCard({
       }}
       onDragEnd={onDragEnd}
     >
-      <button
+      <span
         className="task-card-open"
-        type="button"
+        role="button"
+        tabIndex={0}
         aria-label={`打开 ${task.identifier}: ${task.title}`}
         onClick={() => onEdit(task)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          onEdit(task);
+        }}
       />
 
       <div className="card-topline">

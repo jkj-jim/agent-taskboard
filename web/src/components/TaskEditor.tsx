@@ -20,7 +20,7 @@ import {
   actorKey,
   assigneeTargetForActor,
 } from "../actors";
-import { RUNTIME_STATE_LABELS, isReady, runtimeFor } from "../agentRuntime";
+import { isReady, runtimeFor, runtimeStateLabel } from "../agentRuntime";
 import { agentByActorId } from "../agents";
 import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
@@ -369,7 +369,7 @@ export function TaskEditor({
                   title={assigneeRuntime.statusMessage ?? ""}
                   onClick={onRefreshAgentRuntime}
                 >
-                  {RUNTIME_STATE_LABELS[assigneeRuntime.status]} · 重新检测
+                  {runtimeStateLabel(assigneeRuntime)} · 重新检测
                 </button>
               )}
             </label>

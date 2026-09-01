@@ -417,6 +417,25 @@ test("launching wakes a session, binds it and registers board access once", asyn
   assert.equal(fixture.access.length, 1, "registration is idempotent per process");
 });
 
+test("production launches keep the configured MCP name through setup and the prompt", async () => {
+  const fixture = launchFixture({
+    coordinator: {
+      profile: "production",
+      mcpServerName: "agent-taskboard",
+    },
+  });
+  await fixture.coordinator.launch({
+    taskId: "task-1",
+    expectedVersion: 3,
+    trigger: "status-transition",
+    previousSessionId: null,
+  });
+
+  assert.equal(fixture.access[0].profile, "production");
+  assert.equal(fixture.access[0].serverName, "agent-taskboard");
+  assert.match(fixture.created[0].instruction, /agent-taskboard_get_task/);
+});
+
 test("a launch opens the session in the project's checkout, with the skill attached", async () => {
   const fixture = launchFixture();
   await fixture.coordinator.launch({

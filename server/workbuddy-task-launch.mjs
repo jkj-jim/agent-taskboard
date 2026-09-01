@@ -37,6 +37,7 @@ export function createWorkbuddyTaskLaunchCoordinator({
   resolveWorkspace,
   ensureBoardAccess = ensureWorkbuddyBoardAccess,
   readRegistration = readMcpRegistration,
+  profile = null,
   // 提示词里的工具名由它派生；服务器改名时两处必须一起变。
   mcpServerName = WORKBUDDY_SERVER_NAME,
 }) {
@@ -52,6 +53,8 @@ export function createWorkbuddyTaskLaunchCoordinator({
         origin: typeof boardOrigin === "function" ? boardOrigin() : boardOrigin,
         description: "本地任务看板：列任务、读任务详情与评论、写评论回报进展、按版本改状态",
         skillPath,
+        profile,
+        serverName: mcpServerName,
       }).catch((error) => {
         accessPromise = null;
         throw error;
@@ -106,7 +109,7 @@ export function createWorkbuddyTaskLaunchCoordinator({
     // then costs a full turn only to end in "I have no way to read the task".
     // Only the configuration is worth checking: the proxy connects lazily and
     // closes again, so a quiet socket proves nothing.
-    const registration = await readRegistration();
+    const registration = await readRegistration({ serverName: mcpServerName });
     if (registration?.disabled) {
       throw new ApiError(
         409,

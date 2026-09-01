@@ -9,7 +9,7 @@ import { afterEach, test } from "node:test";
 import { APP_ID, PROFILE_DEVELOPMENT } from "../shared/app-identity.mjs";
 import { APP_VERSION_FULL } from "../shared/app-version.generated.mjs";
 import { createTaskboardServer } from "../server/index.mjs";
-import { readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
+import { offlineCodexBridge, readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
 
 const runningApps = [];
 
@@ -29,6 +29,7 @@ async function startServer(configure, listenOptions = {}) {
     // 不注入的话「负责人是否可分配」会去探测跑测试的这台机器：本机装了 Codex
     // 就 ready、CI 上没装就 409，同一份用例在两处结论不同。
     agentRuntimeStatuses: readyAgentRuntimeStatuses(),
+    codexBridge: offlineCodexBridge(),
     codexDesktopController: {
       async inspect() { return { available: false }; },
       async createTask() { throw new Error("Codex desktop is unavailable in this fixture"); },
@@ -123,6 +124,27 @@ test("health and the default local project are available", async () => {
   assert.equal(result.body.projects[0].name, "Local");
   assert.equal(result.body.projects[0].workspacePath, null);
   assert.equal(result.body.projects[0].issueCount, 0);
+});
+
+test("the local WorkBuddy connect action delegates to the confirmed app launcher", async () => {
+  let calls = 0;
+  const baseUrl = await startServer(async () => ({
+    workbuddyAppLauncher: {
+      async connect() {
+        calls += 1;
+        return { state: "connected", restarted: true, port: 9240 };
+      },
+    },
+  }));
+
+  const connected = await request(baseUrl, "/api/local/workbuddy/connect", { method: "POST" });
+  assert.equal(connected.response.status, 200);
+  assert.deepEqual(connected.body, {
+    state: "connected",
+    restarted: true,
+    port: 9240,
+  });
+  assert.equal(calls, 1);
 });
 
 test("workflow workspaces persist centrally with optimistic concurrency", async () => {

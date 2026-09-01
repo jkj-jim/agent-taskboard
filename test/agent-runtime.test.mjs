@@ -6,6 +6,7 @@ import {
   AGENT_RUNTIME_STATUSES,
   AGENT_TRANSPORTS,
   CONFIGURE_WORKBUDDY_ACTION,
+  CONNECT_WORKBUDDY_ACTION,
   assertAgentRuntimeStatus,
   assertRuntimeSetupAction,
   unknownRuntimeStatus,
@@ -49,7 +50,7 @@ test("the runtime vocabulary is the one the design fixes", () => {
     "unavailable",
     "unknown",
   ]);
-  assert.equal(AGENT_RUNTIME_REASON_CODES.length, 6);
+  assert.equal(AGENT_RUNTIME_REASON_CODES.length, 8);
 });
 
 test("setup actions outside the allowlist are rejected", () => {
@@ -98,6 +99,40 @@ test("setup actions outside the allowlist are rejected", () => {
   // WorkBuddy 的配置动作必须在 allowlist 内
   assert.ok(assertRuntimeSetupAction(CONFIGURE_WORKBUDDY_ACTION));
   assert.equal(CONFIGURE_WORKBUDDY_ACTION.actionId, "configure-workbuddy");
+  assert.ok(assertRuntimeSetupAction(CONNECT_WORKBUDDY_ACTION));
+  assert.equal(CONNECT_WORKBUDDY_ACTION.actionId, "connect-workbuddy-desktop");
+});
+
+test("WorkBuddy distinguishes an MCP setup problem from a disconnected desktop", async () => {
+  const { createWorkbuddyAgent } = await import("../server/agents/workbuddy.mjs");
+  const agent = (available, boardMcp) => createWorkbuddyAgent({
+    desktopController: {
+      async inspect() {
+        return { available, detail: available ? "" : "9240: fetch failed" };
+      },
+    },
+    verifyBoardMcp: async () => boardMcp,
+  });
+
+  const configured = assertAgentRuntimeStatus(
+    await agent(false, { ok: true, detail: "" }).status(),
+  );
+  assert.equal(configured.status, "needs_setup");
+  assert.equal(configured.reasonCode, "WORKBUDDY_DESKTOP_UNAVAILABLE");
+  assert.equal(configured.action.actionId, "connect-workbuddy-desktop");
+  assert.match(configured.statusMessage, /MCP 已连接/);
+
+  const missing = assertAgentRuntimeStatus(
+    await agent(false, { ok: false, detail: "没有登记项" }).status(),
+  );
+  assert.equal(missing.reasonCode, "WORKBUDDY_AUTH_REQUIRED");
+  assert.equal(missing.action.actionId, "configure-workbuddy");
+
+  const ready = assertAgentRuntimeStatus(
+    await agent(true, { ok: true, detail: "" }).status(),
+  );
+  assert.equal(ready.status, "ready");
+  assert.deepEqual(ready.transports, ["host-draft", "host-submit"]);
 });
 
 test("a runtime status with an unknown transport or reason code is rejected", () => {
@@ -197,6 +232,147 @@ test("the interactive wait is the short one the design fixes", () => {
   assert.equal(INTERACTIVE_WAIT_MS, 1_500);
 });
 
+/**
+ * Finder 启动的 App 只拿到 launchd 的默认 PATH（实测就是 `/usr/bin:/bin:/usr/sbin:/sbin`），
+ * 而 codex 装在 /opt/homebrew/bin、claude 装在 ~/.local/bin。不补搜索目录的话，
+ * 安装版会在每台机器上把「装了但找不到」报成「不可用」，而终端里跑的 dev 一切正常。
+ */
+test("agent CLIs stay findable under the PATH a Finder-launched app gets", async () => {
+  const { agentToolDirectories, withAgentToolsOnPath } = await import(
+    "../server/agents/agent-path.mjs"
+  );
+  const launchd = "/usr/bin:/bin:/usr/sbin:/sbin";
+  const augmented = withAgentToolsOnPath({ PATH: launchd }, "/Users/somebody");
+
+  assert.ok(augmented.PATH.startsWith(launchd), "用户自己的 PATH 必须排在最前");
+  for (const directory of ["/opt/homebrew/bin", "/usr/local/bin", "/Users/somebody/.local/bin"]) {
+    assert.ok(augmented.PATH.split(":").includes(directory), directory);
+  }
+  assert.deepEqual(
+    agentToolDirectories("/Users/somebody").filter((entry) => !entry.startsWith("/")),
+    [],
+    "搜索目录必须是绝对路径",
+  );
+
+  // 反复包裹不该让 PATH 越接越长——状态每 10 秒探一次。
+  const twice = withAgentToolsOnPath(augmented, "/Users/somebody");
+  assert.equal(twice.PATH, augmented.PATH);
+  // 原来就有的目录不重复追加。
+  const already = withAgentToolsOnPath({ PATH: "/opt/homebrew/bin" }, "/Users/somebody");
+  assert.equal(already.PATH.split(":").filter((entry) => entry === "/opt/homebrew/bin").length, 1);
+});
+
+/** 找不到 CLI 是「不可用」，不是「没测出来」——两者的恢复动作完全不同。 */
+test("a missing Claude CLI reports unavailable instead of crashing the probe", async () => {
+  const { createClaudeAgent } = await import("../server/agents/claude.mjs");
+  const agent = createClaudeAgent({
+    executable: "agent-taskboard-no-such-binary",
+    processEnv: { PATH: "/nonexistent" },
+  });
+
+  const result = assertAgentRuntimeStatus(await agent.status());
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.reasonCode, "AGENT_NOT_INSTALLED");
+  assert.match(result.statusMessage, /agent-taskboard-no-such-binary/);
+});
+
+/**
+ * 状态灯是「看板能不能把任务交给这个平台」，不是「本机装没装」。
+ *
+ * 三档要分清：客户端已接上是可用；没接上但看板能自己拉起来，也是可用（派发前
+ * 会先拉起，判据是「交得出去」而不是「此刻连着」）；两者都不成立才是待配置——
+ * 那时 Codex 会从负责人下拉里消失，所以只有真的交不出去才能落到这一档。
+ */
+test("Codex is ready whenever the board can hand it a task, connected or not", async () => {
+  const { createCodexAgent } = await import("../server/agents/codex.mjs");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+
+  const codexHome = await mkdtemp(path.join(os.tmpdir(), "codex-home-"));
+  await writeFile(
+    path.join(codexHome, "auth.json"),
+    JSON.stringify({ tokens: { access_token: "probe" } }),
+  );
+  const bridge = (supported, overrides = {}) => ({
+    supported: () => supported,
+    state: () => "down",
+    lastError: () => null,
+    ensure: async () => ({ status: "up" }),
+    stop: () => {},
+    ...overrides,
+  });
+  const agentWith = (inspectDesktop, desktopBridge = () => null) => createCodexAgent({
+    executable: process.execPath,
+    codexHome,
+    inspectDesktop,
+    desktopBridge,
+  });
+  const NATIVE = ["native-draft", "native-submit", "headless"];
+  const offline = async () => ({
+    available: false,
+    reason: "没有开着调试端口的 Codex 客户端（已探测 9229）",
+  });
+
+  const connected = assertAgentRuntimeStatus(
+    await agentWith(async () => ({ available: true })).status(),
+  );
+  assert.equal(connected.status, "ready");
+  assert.deepEqual(connected.transports, NATIVE);
+  assert.equal(connected.action, undefined, "已经接上就没什么要做的");
+
+  const launchable = assertAgentRuntimeStatus(
+    await agentWith(offline, () => bridge({ ok: true, reason: null })).status(),
+  );
+  assert.equal(launchable.status, "ready", "看板能自己拉起来就仍然交得出去");
+  assert.deepEqual(launchable.transports, NATIVE);
+  assert.equal(launchable.action.actionId, "connect-codex-desktop");
+  assert.match(launchable.statusMessage, /自动拉起/);
+
+  const stranded = assertAgentRuntimeStatus(
+    await agentWith(offline, () => bridge({ ok: false, reason: "ChatGPT.app 不在" })).status(),
+  );
+  assert.equal(stranded.status, "needs_setup");
+  assert.equal(stranded.reasonCode, "CODEX_DESKTOP_UNAVAILABLE");
+  assert.deepEqual(stranded.transports, [], "交不出去就不该列 transport");
+  // 装没装是另一回事，别把「接不上」说成「没装」，否则动作会变成下载页。
+  assert.notEqual(stranded.reasonCode, "AGENT_NOT_INSTALLED");
+  assert.match(stranded.statusMessage, /已探测 9229/);
+  assert.match(stranded.statusMessage, /ChatGPT\.app 不在/);
+  assert.equal(stranded.action.kind, "terminal-command");
+  assert.equal(stranded.action.autoRunnable, false);
+});
+
+/** 已经接上时不该再准备一次；没接上时返回一个可以等的 promise，而不是当场阻塞。 */
+test("Codex only prepares a launch when its client is not connected", async () => {
+  const { createCodexAgent } = await import("../server/agents/codex.mjs");
+  let ensured = 0;
+  const desktopBridge = () => ({
+    supported: () => ({ ok: true, reason: null }),
+    state: () => "down",
+    lastError: () => null,
+    ensure: async () => { ensured += 1; return { status: "up" }; },
+    stop: () => {},
+  });
+
+  const connected = createCodexAgent({
+    inspectDesktop: async () => ({ available: true }),
+    desktopBridge,
+  });
+  assert.equal(await connected.prepareLaunch(), null);
+  assert.equal(ensured, 0);
+
+  const offline = createCodexAgent({
+    inspectDesktop: async () => ({ available: false }),
+    desktopBridge,
+  });
+  const preparing = await offline.prepareLaunch();
+  assert.ok(preparing.ready, "调用方要能等它");
+  assert.match(preparing.message, /正在拉起/);
+  assert.deepEqual(await preparing.ready, { status: "up" });
+  assert.equal(ensured, 1);
+});
+
 test("every agent result carries the fields the endpoint promises", async () => {
   const statuses = createAgentRuntimeStatuses({
     registry: registryOf([
@@ -231,8 +407,10 @@ test("the endpoint returns runtime status only, and the assignee gate uses it", 
   const path = await import("node:path");
 
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-runtime-"));
+  const { offlineCodexBridge } = await import("./helpers/agent-runtime-stub.mjs");
   const app = createTaskboardServer({
     dataDirectory: directory,
+    codexBridge: offlineCodexBridge(),
     agentRuntimeStatuses: createAgentRuntimeStatuses({
       registry: registryOf([
         stubAgent("codex", () => ({ status: "ready", transports: ["headless"] })),

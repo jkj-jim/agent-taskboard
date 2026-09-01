@@ -21,6 +21,12 @@ function workflowStatuses() {
 }
 
 test("dragging previews the insertion rank before committing it", () => {
+  assert.match(
+    cardSource,
+    /<span[\s\S]*?className="task-card-open"[\s\S]*?role="button"[\s\S]*?onKeyDown=/,
+    "the full-card click target must remain keyboard accessible without swallowing native drag",
+  );
+  assert.doesNotMatch(cardSource, /<button[\s\S]*?className="task-card-open"/);
   assert.match(boardColumnSource, /function findDropBefore/);
   assert.match(boardColumnSource, /clientY < card\.getBoundingClientRect\(\)\.top \+ card\.offsetHeight \/ 2/);
   assert.match(boardColumnSource, /onDrop\(status, taskId, findDropBefore/);

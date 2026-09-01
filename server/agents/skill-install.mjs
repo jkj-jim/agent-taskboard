@@ -3,6 +3,9 @@
 // 权威目录只有一个：~/.agents/skills/manage-taskboard。Claude Code 与 Codex 各自
 // 只扫自己的 skills 目录，所以两边都建一条指向它的软链——Codex 的应用包里
 // ~/.codex/skills 与 ~/.agents/skills 都出现过，赌它认共享目录不如多建一条。
+// 实测（Codex 151.0.7922.174）它两个都扫：同一个 Skill 会在补全下拉里出现两次。
+// 安装版的两条软链指向同一份 SKILL.md，所以重复项无害；注入器也已按路径逐个
+// 试选，不再假设候选只有一个。
 // skill 是三套实例的共享例外，写权限只给 production：beta 一律只读，连冲突都只报不改。
 
 import { cp, lstat, mkdir, readFile, readlink, realpath, stat, writeFile } from "node:fs/promises";
@@ -86,8 +89,8 @@ export async function inspectSkillInstallation({ skillDirectory, claudeHome, cod
     isSymlink: installedState.symlink,
     marker: await readMarker(skillDirectory),
     claudeLink: await describeLink(path.join(claudeHome, "skills"), skillDirectory),
-    // Codex 两个位置都引用过（~/.codex/skills 与 ~/.agents/skills），到底扫哪个
-    // 没有可靠依据。多建一条软链是幂等的，比赌它认共享目录便宜得多。
+    // Codex 两个位置都扫（实测），多建一条软链是幂等的：两条指向同一份 SKILL.md，
+    // 补全下拉里的重复项因此指向同一个路径。
     codexLink: codexHome
       ? await describeLink(path.join(codexHome, "skills"), skillDirectory)
       : null,

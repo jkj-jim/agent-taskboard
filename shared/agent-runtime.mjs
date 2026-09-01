@@ -20,6 +20,10 @@ export const AGENT_RUNTIME_STATUSES = [
 export const AGENT_RUNTIME_REASON_CODES = [
   "CLAUDE_AUTH_REQUIRED",
   "CODEX_AUTH_REQUIRED",
+  // 装好了、也登录了，但看板够不到那个正在跑的客户端。和 AGENT_NOT_INSTALLED
+  // 是两回事：后者该去装，这个只需要把客户端接上来。
+  "CODEX_DESKTOP_UNAVAILABLE",
+  "WORKBUDDY_DESKTOP_UNAVAILABLE",
   "WORKBUDDY_AUTH_REQUIRED",
   "SKILL_LINK_CONFLICT",
   "AGENT_NOT_INSTALLED",
@@ -40,6 +44,8 @@ export const RUNTIME_SETUP_APP_ACTION_IDS = [
   "open-codex-login",
   "open-workbuddy-authorization",
   "configure-workbuddy",
+  "connect-workbuddy-desktop",
+  "connect-codex-desktop",
   "refresh-agent-status",
 ];
 
@@ -153,6 +159,15 @@ export const CONFIGURE_WORKBUDDY_ACTION = {
   message: "由看板写入 WorkBuddy 的 MCP 连接并验证握手；写入前会自动备份现有配置。",
   autoRunnable: true,
   actionId: "configure-workbuddy",
+};
+
+/** MCP 已配置，但普通启动的 WorkBuddy 没有开放看板控制所需的调试端口。 */
+export const CONNECT_WORKBUDDY_ACTION = {
+  kind: "app-action",
+  label: "连接",
+  message: "完全退出并重新打开 WorkBuddy，以启用看板控制；未发送的草稿请先保存。",
+  autoRunnable: true,
+  actionId: "connect-workbuddy-desktop",
 };
 
 /** 探测不出结论时的统一结果：不可用与「这次没测出来」必须区分开。 */

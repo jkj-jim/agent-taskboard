@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 import { createTaskboardServer } from "../server/index.mjs";
 import { SKILL_MARKER } from "../server/agents/prompt.mjs";
-import { readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
+import { offlineCodexBridge, readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
 import { waitFor } from "./helpers/wait-for.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -105,6 +105,7 @@ if (args[0] === "auth" && args[1] === "status") {
     // 这些用例验证的是启动与 session 绑定，Agent 的真实可用性由
     // test/agent-runtime.test.mjs 单独覆盖，这里固定为 ready。
     agentRuntimeStatuses: overrides.agentRuntimeStatuses ?? readyAgentRuntimeStatuses(),
+    codexBridge: overrides.codexBridge ?? offlineCodexBridge(),
   });
   const address = await app.listen({ host, port: 0 });
   const baseUrl = `http://127.0.0.1:${address.port}`;

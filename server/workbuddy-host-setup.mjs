@@ -87,6 +87,34 @@ export async function readMcpRegistration({
   return { ...entry, disabled: entry.disabled === true };
 }
 
+/**
+ * Checks the registration WorkBuddy will actually load, not merely whether the
+ * board's own endpoint happens to answer. Profile name, URL and disabled state
+ * are all part of the connection contract.
+ */
+export async function verifyMcpRegistration({
+  origin,
+  serverName = WORKBUDDY_SERVER_NAME,
+  homeDirectory = os.homedir(),
+  verifyEndpoint = verifyMcpEndpoint,
+} = {}) {
+  const expectedUrl = `${origin?.replace?.(/\/+$/, "")}/mcp`;
+  const registration = await readMcpRegistration({ serverName, homeDirectory });
+  if (!registration) {
+    return { ok: false, detail: `WorkBuddy 中没有 ${serverName} MCP 配置` };
+  }
+  if (registration.disabled) {
+    return { ok: false, detail: `WorkBuddy 中的 ${serverName} MCP 已停用` };
+  }
+  if (registration.type !== "http" || registration.url !== expectedUrl) {
+    return {
+      ok: false,
+      detail: `WorkBuddy 中的 ${serverName} MCP 没有指向当前看板 ${expectedUrl}`,
+    };
+  }
+  return verifyEndpoint(registration.url);
+}
+
 /** Whether something is already answering MCP on a registered URL. */
 async function endpointAnswers(url, fetchImplementation = globalThis.fetch) {
   try {

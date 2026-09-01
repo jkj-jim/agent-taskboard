@@ -119,15 +119,20 @@ async function defaultConnect({
   fetchImplementation = globalThis.fetch,
   createConnection = (url) => new CdpConnection(url),
 } = {}) {
+  const ports = codexDebuggingPorts(preferredPort);
   let lastError = null;
-  for (const port of codexDebuggingPorts(preferredPort)) {
+  // 「一个开着调试端口的客户端都没有」和「客户端在但没挂注入器」是两种处境，
+  // 恢复动作也不同。不分开的话状态区只能拿到一句 `fetch failed`。
+  let debuggableClient = false;
+  for (const port of ports) {
     let targets;
     try {
       targets = await codexTargets(port, fetchImplementation);
-    } catch (error) {
-      lastError = error;
+    } catch {
+      // 端口上没人听是常态（没开调试端口），不值得当成失败原因往上报。
       continue;
     }
+    debuggableClient = true;
     for (const target of targets) {
       const cdp = createConnection(target.webSocketDebuggerUrl);
       try {
@@ -142,7 +147,10 @@ async function defaultConnect({
       cdp.close();
     }
   }
-  throw lastError ?? new Error("No debuggable Codex client is running");
+  if (!debuggableClient) {
+    throw new Error(`没有开着调试端口的 Codex 客户端（已探测 ${ports.join("、")}）`);
+  }
+  throw lastError ?? new Error("Codex 客户端里没有可注入的窗口");
 }
 
 async function waitForValue(read, predicate, message, timeoutMs = 12_000) {

@@ -1454,9 +1454,19 @@ export function App() {
   function autoLaunchCodex(
     _previous: Task | null,
     task: Task,
-    agentStart?: { status?: string; agentKind?: string; error?: string } | null,
+    agentStart?: {
+      status?: string;
+      agentKind?: string;
+      error?: string;
+      message?: string;
+    } | null,
   ): { task: Task; started: boolean } {
     if (!agentStart) return { task, started: false };
+    // 客户端还在拉起：既没失败也还没开始，如实说一句，别当成静默成功。
+    if (agentStart.status === "preparing") {
+      setActionError(agentStart.message ?? null);
+      return { task, started: false };
+    }
     if (agentStart.status === "failed") {
       setActionError(
         `${task.identifier} 已保存，但未能在 ${agentStart.agentKind ?? "Agent"} 中启动：`
@@ -1549,6 +1559,8 @@ export function App() {
               ? `${saved.identifier} 已更新，Codex 已在后台开始处理。`
               : agentStart?.status === "started"
               ? `${saved.identifier} 已更新，${agentLabel(agentStart.agentKind)} 已开始处理。`
+              : agentStart?.status === "preparing"
+              ? `${saved.identifier} 已更新，${agentLabel(agentStart.agentKind)} 正在拉起，就绪后自动开始。`
               : `${saved.identifier} 已更新。`,
             () => restoreTaskDetails(previous, saved, previousAssigneeTarget),
           );
@@ -1629,6 +1641,8 @@ export function App() {
         ? `${moveMessage} Codex 已在后台开始处理。`
         : agentStart?.status === "started"
         ? `${moveMessage} ${agentLabel(agentStart.agentKind)} 已开始处理。`
+        : agentStart?.status === "preparing"
+        ? `${moveMessage} ${agentLabel(agentStart.agentKind)} 正在拉起，就绪后自动开始。`
         : moveMessage;
       pushUndo(message, async () => {
         const candidate = tasksRef.current.find((current) => current.id === moved.id);
@@ -1703,6 +1717,8 @@ export function App() {
             ? `${task.identifier} 已更新，Codex 已在后台开始处理。`
             : agentStart?.status === "started"
             ? `${task.identifier} 已更新，${agentLabel(agentStart.agentKind)} 已开始处理。`
+            : agentStart?.status === "preparing"
+            ? `${task.identifier} 已更新，${agentLabel(agentStart.agentKind)} 正在拉起，就绪后自动开始。`
             : `${task.identifier} 已更新。`),
           () => restoreTaskDetails(previous, updated, previousAssigneeTarget),
         );
@@ -1901,6 +1917,11 @@ export function App() {
         "foreground",
         taskAgentSessionId(task, "codex"),
       );
+      // 客户端还在拉起：这次没有任务快照可合，服务端就绪后会自己补派发。
+      if (result.status === "preparing") {
+        setActionError(result.message);
+        return;
+      }
       setTasks((current) => sortTasks(current.map((candidate) => (
         candidate.id === result.task.id ? result.task : candidate
       ))));

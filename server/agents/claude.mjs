@@ -231,8 +231,10 @@ export function createClaudeAgent(config) {
             status: "unavailable",
             transports: [],
             reasonCode: "AGENT_NOT_INSTALLED",
+            // 一期不引导下载（AGENT_DOWNLOAD_URLS 是空的），所以这里没有动作可给。
+            // 此前调的 `agentDownloadAction` 根本不存在，只要 claude 不在 PATH 上
+            // 就会抛 ReferenceError，把「未安装」误报成「状态未知」。
             statusMessage: `无法运行 ${executable}：${error instanceof Error ? error.message : String(error)}`,
-            action: agentDownloadAction(definition.kind, definition.label),
           };
         }
       }

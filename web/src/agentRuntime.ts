@@ -17,6 +17,11 @@ export const RUNTIME_STATE_LABELS: Record<AgentRuntimeStatus["status"], string> 
   unknown: "状态未知",
 };
 
+export function runtimeStateLabel(runtime: AgentRuntimeStatus | undefined): string {
+  if (runtime?.reasonCode === "WORKBUDDY_DESKTOP_UNAVAILABLE") return "待连接";
+  return RUNTIME_STATE_LABELS[runtime?.status ?? "unknown"];
+}
+
 /**
  * 首页与负责人下拉共用的唯一 runtime 状态源：首次进入拉一次，窗口重新获得焦点时
  * 后台刷新（服务端 10 秒缓存决定是否真的重测），手动刷新强制重测。
@@ -80,6 +85,8 @@ export function runSetupAction(
     openInternalRoute: (route: string) => void;
     notify: (message: string) => void;
     configureWorkbuddy?: () => void;
+    connectWorkbuddyDesktop?: () => void;
+    connectCodexDesktop?: () => void;
   },
 ): boolean {
   switch (action.kind) {
@@ -90,6 +97,14 @@ export function runSetupAction(
       }
       if (action.actionId === "configure-workbuddy" && handlers.configureWorkbuddy) {
         handlers.configureWorkbuddy();
+        return true;
+      }
+      if (action.actionId === "connect-workbuddy-desktop" && handlers.connectWorkbuddyDesktop) {
+        handlers.connectWorkbuddyDesktop();
+        return true;
+      }
+      if (action.actionId === "connect-codex-desktop" && handlers.connectCodexDesktop) {
+        handlers.connectCodexDesktop();
         return true;
       }
       // 其余 app action 由 Tauri 协调（隔离 Codex 登录窗口、WorkBuddy 授权入口），

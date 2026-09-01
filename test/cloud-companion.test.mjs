@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { main } from "../cli/taskctl.mjs";
 import { createTaskboardServer } from "../server/index.mjs";
-import { readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
+import { offlineCodexBridge, readyAgentRuntimeStatuses } from "./helpers/agent-runtime-stub.mjs";
 
 const temporaryDirectories = [];
 
@@ -507,6 +507,7 @@ test("configured server proxies business APIs without touching local rows and ad
     dataDirectory: directory,
     // 不注入的话 transport 选择会去探测跑测试的这台机器，本机装了 Codex 才通过
     agentRuntimeStatuses: readyAgentRuntimeStatuses(),
+    codexBridge: offlineCodexBridge(),
     cloudConfigPath: configPath,
     codexDesktopController: {
       async inspect() { return { available: false }; },
@@ -583,6 +584,7 @@ test("the local companion launches a native Codex task and binds it back to the 
     dataDirectory: directory,
     // 不注入的话 transport 选择会去探测跑测试的这台机器，本机装了 Codex 才通过
     agentRuntimeStatuses: readyAgentRuntimeStatuses(),
+    codexBridge: offlineCodexBridge(),
     cloudConfigPath: configPath,
     codexDesktopController: {
       async inspect() { return { available: true }; },
@@ -663,6 +665,7 @@ test("cloud mode exposes machine capabilities only to loopback while local mode 
     dataDirectory: directory,
     // 不注入的话 transport 选择会去探测跑测试的这台机器，本机装了 Codex 才通过
     agentRuntimeStatuses: readyAgentRuntimeStatuses(),
+    codexBridge: offlineCodexBridge(),
     cloudConfigPath: configPath,
     codexDesktopController: {
       async inspect() { return { available: false }; },

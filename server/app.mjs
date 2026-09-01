@@ -37,6 +37,7 @@ import {
   diffSkillAgainstTemplate,
   inspectSkillInstallation,
 } from "./agents/skill-install.mjs";
+import { withAgentToolsOnPath } from "./agents/agent-path.mjs";
 import { createTaskctlRuntime } from "./agents/taskctl-bin.mjs";
 import { createDeviceWorkspaces } from "./agents/workspaces.mjs";
 import { workspaceKey } from "../shared/workspace-key.mjs";
@@ -45,8 +46,14 @@ import {
   createCodexDesktopController,
   createCodexTaskLaunchCoordinator,
 } from "./codex-desktop-controller.mjs";
+import { createCodexBridge } from "./codex-bridge.mjs";
 import { createWorkbuddyDesktopController } from "./workbuddy-desktop-controller.mjs";
-import { ensureWorkbuddyBoardAccess, verifyMcpEndpoint } from "./workbuddy-host-setup.mjs";
+import {
+  ensureWorkbuddyBoardAccess,
+  verifyMcpRegistration,
+  workbuddyServerNameForProfile,
+} from "./workbuddy-host-setup.mjs";
+import { createWorkbuddyAppLauncher } from "./workbuddy-app-launcher.mjs";
 import { createWorkbuddyTaskLaunchCoordinator } from "./workbuddy-task-launch.mjs";
 import { createMcpService } from "./mcp.mjs";
 import {
@@ -1414,6 +1421,9 @@ export function resolveServerOptions(options = {}) {
     skillPath: options.skillPath ?? path.join(PROJECT_ROOT, "skills", "manage-taskboard", "SKILL.md"),
     // 安装版由 --taskctl-cli-path 指到 Resources/cli；PROJECT_ROOT 只服务于开发和测试。
     taskctlCliPath: options.taskctlCliPath ?? path.join(PROJECT_ROOT, "cli", "taskctl.mjs"),
+    // 看板自己拉起 Codex 桥接时要跑的注入器（安装版指向 Resources/scripts）。
+    codexInjectorPath: options.codexInjectorPath
+      ?? path.join(PROJECT_ROOT, "scripts", "codex-injector.mjs"),
     codexExecutable: options.codexExecutable ?? process.env.CODEX_EXECUTABLE ?? "codex",
     codexStatePath: options.codexStatePath
       ?? path.join(codexHome, ".codex-global-state.json"),
@@ -1470,25 +1480,38 @@ export function createTaskboardServer(options = {}) {
     database,
     readProjectMappings: async () => (await cloudConfig.read()).projectMappings,
   });
+  // Finder 启动的 App 只拿到 launchd 的默认 PATH，用户装的 codex / claude 都不在
+  // 里面。探测、catalog 和真正跑的那一轮都用这份补过的环境，否则安装版会在每台
+  // 机器上把「装了但找不到」报成「不可用」。
+  const agentEnv = withAgentToolsOnPath(options.processEnv ?? process.env);
+  const workbuddyMcpServerName = workbuddyServerNameForProfile(resolved.profile);
   const agents = createAgentRegistry({
     codex: {
       inspectDesktop: () => codexDesktopController.inspect(),
+      // controller 与 bridge 都在 registry 之后才建好，所以这里也惰性取。
+      desktopBridge: () => codexBridge,
       executable: resolved.codexExecutable,
       statePath: resolved.codexStatePath,
       skillPath: resolved.skillPath,
+      processEnv: agentEnv,
       database,
     },
     claude: {
       executable: resolved.claudeExecutable,
       claudeHome: resolved.claudeHome,
+      processEnv: agentEnv,
       database,
       deviceWorkspaces,
     },
     workbuddy: {
       debuggingPort: options.workbuddyDebuggingPort,
       desktopController: options.workbuddyDesktopController,
-      // origin 要等 listen() 之后才知道，所以惰性求值。
-      verifyBoardMcp: () => verifyMcpEndpoint(`${taskctlRuntime.currentOrigin()}/mcp`),
+      // 同时核对 WorkBuddy 实际登记的 profile 名称与 URL；只探自己的 /mcp
+      // 会把「服务端活着」误当成「WorkBuddy 已配置」。origin 要等 listen() 后才知道。
+      verifyBoardMcp: () => verifyMcpRegistration({
+        origin: taskctlRuntime.currentOrigin(),
+        serverName: workbuddyMcpServerName,
+      }),
     },
   });
   const taskctlRuntime = createTaskctlRuntime({
@@ -1519,6 +1542,8 @@ export function createTaskboardServer(options = {}) {
     agents,
     manageTaskboardSkillPath: resolved.skillPath,
     taskctlRuntime,
+    // 真正跑的那一轮也要找得到 CLI，不能只有探测能找到。
+    processEnv: agentEnv,
     onIssueSession: ({ issueId }) => {
       const task = database.getTask(issueId);
       if (task) events.emit("task.updated", { task });
@@ -1528,6 +1553,17 @@ export function createTaskboardServer(options = {}) {
   const codexDefinition = agentByKind("codex");
   const codexDesktopController = options.codexDesktopController
     ?? createCodexDesktopController({ preferredPort: options.codexDebuggingPort });
+  // 看板自己养的 Codex 桥接：状态区的按钮和任务派发前的自动拉起都走它（§3、§9）。
+  const codexBridge = options.codexBridge ?? createCodexBridge({
+    controller: codexDesktopController,
+    injectorPath: resolved.codexInjectorPath,
+    // 注入器要往里写隔离实例的 Electron 目录，只能落在本 profile 的数据目录下。
+    launcherStatePath: path.join(resolved.dataDirectory, "codex-launcher"),
+    taskboardPort: () => Number(new URL(boardOrigin()).port),
+  });
+  const workbuddyAppLauncher = options.workbuddyAppLauncher ?? createWorkbuddyAppLauncher({
+    port: options.workbuddyDebuggingPort,
+  });
 
   function requestHeadersForCloud(request) {
     const headers = new Headers();
@@ -1638,6 +1674,8 @@ export function createTaskboardServer(options = {}) {
     loadTask: loadTaskForLaunch,
     resolveWorkspace: resolveTaskWorkspace,
     bindSession: bindSessionForLaunch,
+    profile: resolved.profile,
+    mcpServerName: workbuddyMcpServerName,
   });
 
   /** One service per author identity; writes are attributed to the agent. */
@@ -1654,6 +1692,14 @@ export function createTaskboardServer(options = {}) {
   const launchCoordinator = createAgentLaunchCoordinator({
     registry: agents,
     runtimeStatuses: agentRuntimeStatuses,
+    reloadTask: (taskId) => database.getTask(taskId),
+    // 补派发的结果没有请求可以回；成功会通过会话绑定广播出去，失败只能落日志，
+    // 用户看到的仍是该 Agent 状态灯上的原因。
+    reportDeferred: ({ agentKind, taskId, result }) => {
+      if (result?.status === "failed") {
+        console.error(`[launch] ${taskId} 补派发到 ${agentKind} 失败：${result.error}`);
+      }
+    },
     runHeadless: async ({ agentKind, task }) => {
       const thread = await aiChat.createThread({
         projectId: task.projectId,
@@ -1911,9 +1957,14 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/meta does not accept query parameters");
         }
         const loopback = isLoopbackAddress(request.socket.remoteAddress);
+        // 客户端此刻没接上但看板能自己拉起时也算可用：点「在对话中打开」会先拉起
+        // 再派发，前端不该在这里先把人挡掉（§3）。
         const [nativeCodexTaskLaunch, workbuddyTaskLaunch] = loopback
           ? await Promise.all([
-            codexDesktopController.inspect().then((state) => state.available, () => false),
+            codexDesktopController.inspect().then(
+              (state) => state.available || codexBridge.supported().ok,
+              () => codexBridge.supported().ok,
+            ),
             workbuddyAgent.desktopController.inspect().then((state) => state.available, () => false),
           ])
           : [false, false];
@@ -2115,6 +2166,30 @@ export function createTaskboardServer(options = {}) {
           requiresApproval: access.requiresApproval,
           approvalHint: access.approvalHint,
         });
+      }
+
+      if (pathname === "/api/local/workbuddy/connect") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "WorkBuddy connect");
+        await assertEmptyRequestBody(request, "POST /api/local/workbuddy/connect");
+        return sendJson(response, 200, await workbuddyAppLauncher.connect());
+      }
+
+      // 手动把 Codex 桥接拉起来（§3）。派发任务时会自动做同一件事，这条只是让
+      // 用户不必先建一个任务才能触发。立即返回，不把界面挂在冷启动上。
+      if (pathname === "/api/local/codex/connect") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        assertNoQuery(url.searchParams, "Codex connect");
+        const capability = codexBridge.supported();
+        if (!capability.ok) {
+          throw new ApiError(409, "CODEX_DESKTOP_UNAVAILABLE", capability.reason);
+        }
+        codexBridge.ensure().catch((error) => {
+          console.error(`[codex] 拉起客户端失败：${error.message}`);
+        });
+        return sendJson(response, 202, { state: codexBridge.state() });
       }
 
       // 共享 skill 的现状与本版本模板的差异（§7）。只读：是否应用由用户显式决定。
@@ -2823,6 +2898,8 @@ export function createTaskboardServer(options = {}) {
       events.close();
       for (const response of aiEventResponses) response.end();
       aiEventResponses.clear();
+      // 注入器是本进程养的子进程，不收掉就会变成孤儿继续占着 CDP 连接。
+      codexBridge.stop();
       await aiChat.close();
       // Event streams and idle keep-alive sockets never end on their own, so
       // `server.close()` alone waits forever and keeps the port bound — which

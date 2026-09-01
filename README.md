@@ -78,7 +78,7 @@ Agent 自己不需要设这个变量，shim 已经钉好了。
 
 ### 4. Codex 客户端只有一个
 
-`npm run codex` 起的是带隔离 user-data-dir 的独立 Codex 实例（CDP `9231`）；安装版不自己启动 Codex，而是连接已经在跑且挂了注入器的客户端。所以两个看板会去驱动同一个 Codex 实例——同一时刻只让一个看板派发 Codex 任务。Claude 与 WorkBuddy 没这个限制。
+`npm run codex` 起的是带隔离 user-data-dir 的独立 Codex 实例（CDP `9231`）；安装版用同一份注入器、同一个端口，只是加了 `--automation-only`（不挂可见面板）、`--shared-profile`（Codex 没在跑时借它自己的用户目录）和 `--no-supervisor`（服务归 sidecar 管）。两个看板因此会去驱动同一个 Codex 实例——同一时刻只让一个看板派发 Codex 任务，谁先把桥接挂上谁生效。Claude 与 WorkBuddy 没这个限制。
 
 `CODEX_HOME` 三套实例共用且**故意不隔离**：按 profile 覆盖它会让 Codex 回到未登录状态。
 
@@ -160,7 +160,11 @@ ln -s /absolute/path/to/agent-taskboard/skills/manage-taskboard \
    claude auth status   # loggedIn 必须为 true
    ```
 
-   看板顶部的状态区会展示三个 Agent 的实时可用状态，数据来自 `GET /api/local/agents`。未登录时那里会直接给出对应动作（Claude 是复制 `claude auth login`，看板不会代跑终端命令）。新任务只能分配给状态为「可用」的 Agent；已有任务的负责人不受状态变化影响。
+   看板顶部的状态区会展示三个 Agent 的实时可用状态，数据来自 `GET /api/local/agents`。「可用」的含义是**看板现在就能把任务交给这个平台**，不是「本机装了它」：Claude 看 CLI 装没装、登没登录，因为它就是用 CLI 跑的；WorkBuddy 还要 MCP 握手能列出看板工具；Codex 需要一个开着调试端口、挂了看板注入器的客户端，而**这一步看板会自己做**（见下），所以只要 CLI 已登录且装了 Codex 客户端就算可用，客户端没接上也一样。状态区会直接给出对应动作（终端命令只复制，看板不会代跑）。新任务只能分配给状态为「可用」的 Agent；已有任务的负责人不受状态变化影响。
+
+   **Codex 客户端由看板拉起。** 客户端还没接上时，状态区的 Codex 那一格会多一个「连接客户端」按钮；把 Codex 负责的任务拖进「进行中」（或点「在对话中打开」）也会自动触发同一件事。冷启动要二三十秒，所以看板**先接受这次操作并回一句「正在拉起」，就绪后自己补派发**，拖拽不会卡住。Codex 没在运行时，看板用它自己的用户目录带调试端口启动，得到的就是你平时那个 Codex，只有一个窗口，看板退出时也不会关掉它；已经在运行时则另开一个隔离实例（`--user-data-dir` 指向 profile 数据目录下的 `codex-launcher/`），原窗口和其中的会话不受影响。补派发失败只写日志，原因会继续出现在 Codex 的状态区里。
+
+   > CDP 端口对本机任何进程都不鉴权，桥接开着期间这台机器上只应运行可信的本地代码。
 
 2. **确认项目能解析到本机目录。** 工作区解析与 Agent 无关，按顺序取三个来源：Codex 应用维护的本机项目路径表、项目自身的 `workspacePath`（从文件夹新建的项目自带）、以及 `taskctl project map` 写下的设备映射。多数项目会自动命中；若报 `PROJECT_WORKSPACE_UNAVAILABLE`，显式映射一次即可：
 

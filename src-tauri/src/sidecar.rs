@@ -67,7 +67,7 @@ impl Supervisor {
         }
     }
 
-    // 十个启动参数（§4）。安装版不用环境变量，也不允许 sidecar 回退到仓库路径。
+    // 十一个启动参数（§4）。安装版不用环境变量，也不允许 sidecar 回退到仓库路径。
     fn spawn(&self, app: &AppHandle) -> Result<Receiver<()>, String> {
         let resources = app
             .path()
@@ -101,6 +101,8 @@ impl Supervisor {
                 text(self.launch.skill_path.clone()),
                 "--taskctl-cli-path".into(),
                 text(resources.join("cli").join("taskctl.mjs")),
+                "--codex-injector-path".into(),
+                text(resources.join("scripts").join("codex-injector.mjs")),
             ])
             .spawn()
             .map_err(|error| format!("failed to start Node sidecar: {error}"))?;

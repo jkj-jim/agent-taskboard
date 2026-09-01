@@ -26,6 +26,8 @@ function installedArgv(overrides = {}) {
     "--static-directory": "/Applications/Agent Taskboard.app/Contents/Resources/dist/web",
     "--skill-path": "/Users/somebody/.agents/skills/manage-taskboard/SKILL.md",
     "--taskctl-cli-path": "/Applications/Agent Taskboard.app/Contents/Resources/cli/taskctl.mjs",
+    "--codex-injector-path":
+      "/Applications/Agent Taskboard.app/Contents/Resources/scripts/codex-injector.mjs",
     ...overrides,
   };
   return Object.entries(values)
@@ -33,8 +35,8 @@ function installedArgv(overrides = {}) {
     .flatMap(([flag, value]) => [flag, value]);
 }
 
-test("the ten installed parameters land on listen and server options", () => {
-  assert.equal(SIDECAR_PARAMETERS.length, 10);
+test("the eleven installed parameters land on listen and server options", () => {
+  assert.equal(SIDECAR_PARAMETERS.length, 11);
 
   const parsed = parseSidecarArgv(installedArgv(), { env: {}, projectRoot });
 
@@ -49,6 +51,8 @@ test("the ten installed parameters land on listen and server options", () => {
     staticDirectory: "/Applications/Agent Taskboard.app/Contents/Resources/dist/web",
     skillPath: "/Users/somebody/.agents/skills/manage-taskboard/SKILL.md",
     taskctlCliPath: "/Applications/Agent Taskboard.app/Contents/Resources/cli/taskctl.mjs",
+    codexInjectorPath:
+      "/Applications/Agent Taskboard.app/Contents/Resources/scripts/codex-injector.mjs",
   });
 });
 

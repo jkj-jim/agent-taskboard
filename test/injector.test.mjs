@@ -76,7 +76,10 @@ test("the package injection command remains resident for tab-triggered recovery"
 
 test("the local launcher preserves a running Codex and starts a separate loopback instance", () => {
   assert.match(source, /AGENT_TASKBOARD_HOST: readEnv\("HOST"\)\?\.trim\(\) \|\| "127\.0\.0\.1"/);
-  assert.match(source, /const launcherCodexUserDataPath = path\.join\(projectRoot, "\.data", "codex-user-data"\)/);
+  // 装到 /Applications 后 projectRoot 是只读的，隔离实例的 Electron 目录必须能被
+  // 调用方指到别处（安装版给的是 profile 数据目录）。
+  assert.match(source, /const launcherStatePath = readEnv\("CODEX_LAUNCHER_DIR"\)/);
+  assert.match(source, /const launcherCodexUserDataPath = path\.join\(launcherStatePath, "codex-user-data"\)/);
   assert.match(source, /async function launchCodex[\s\S]*?Contents", "MacOS", executableName/);
   assert.match(source, /`--user-data-dir=\$\{launcherCodexUserDataPath\}`/);
   assert.match(source, /CODEX_ELECTRON_USER_DATA_PATH: launcherCodexUserDataPath/);
@@ -85,6 +88,50 @@ test("the local launcher preserves a running Codex and starts a separate loopbac
   assert.match(source, /stopLaunchedCodex\(codexProcess\)/);
   assert.doesNotMatch(source, /Codex is already running without this CDP port/);
   assert.doesNotMatch(source, /function codexIsRunning/);
+});
+
+/**
+ * `--shared-profile` 是安装版用的：Codex 没在跑时借它自己的用户目录带端口拉起，
+ * 用户看到的就是平时那个 Codex；已经在跑时仍然隔离，因为单实例锁不允许事后加端口。
+ * 借来的实例不归启动器所有，退出时不能连它一起关掉。
+ */
+test("the shared-profile launch adopts an idle Codex and never closes it", () => {
+  assert.match(source, /else if \(arg === "--shared-profile"\) options\.sharedProfile = true;/);
+  assert.match(source, /function codexClientRunning\(appPath\)/);
+  assert.match(source, /const isolated = !options\.sharedProfile \|\| codexClientRunning\(options\.appPath\)/);
+  assert.match(source, /launchCodex\(options\.appPath, options\.port, \{ isolated \}\)/);
+  assert.match(source, /child\.taskboardOwned = isolated/);
+  assert.match(source, /if \(child\?\.taskboardOwned === false\) return;/);
+});
+
+/**
+ * 同名 Skill 会在补全下拉里出现多次——实测 Codex 同时扫 `~/.agents/skills` 与
+ * `~/.codex/skills`，两边各一份就是两个候选，而按钮上没有任何能分辨路径的属性。
+ *
+ * 两条都不能丢：
+ *  - 高亮项现在标的是 `aria-current`，`aria-selected` 是旧写法。只认旧写法时，
+ *    多候选场景就只剩「候选恰好一个」这条兜底，必然落空并超时。
+ *  - 光选高亮项还不够：它可能是另一份拷贝。要挨个试到 mention 的路径对上为止，
+ *    否则看板会把任务挂到别人的 Skill 上。
+ */
+test("the skill mention tries every same-named candidate until the path matches", () => {
+  assert.match(source, /candidate\.getAttribute\("aria-current"\) === "true"/);
+  assert.match(source, /candidate\.getAttribute\("aria-selected"\) === "true"/);
+  assert.match(source, /const CANDIDATE_ATTEMPTS = 4;/);
+  // 高亮项排在最前先试，它是用户直接回车会得到的那份。
+  assert.match(source, /const order = highlighted === -1/);
+  assert.match(source, /status: mention\.selectedPath === skillPath \? "matched" : "mismatch"/);
+  assert.match(source, /rejectedPaths\.push\(/);
+  // 全试完还是不对时要报出试过哪些路径，只说「选错了」没法排查。
+  assert.match(source, /试过 \$\{rejectedPaths\.join\("、"\)\}/);
+});
+
+/** `--no-supervisor`：服务归调用方管时绝不自己再起一个，否则会和 sidecar 抢端口。 */
+test("the injector never starts a second board when the caller owns the service", () => {
+  assert.match(source, /else if \(arg === "--no-supervisor"\) options\.supervise = false;/);
+  assert.match(source, /function createTaskboardSupervisor\(\{ detached, supervise = true \}\)/);
+  assert.match(source, /if \(!supervise\) throw new Error\(/);
+  assert.match(source, /supervise: options\.supervise/);
 });
 
 test("the local launcher retries a renderer swap during the first injection", () => {

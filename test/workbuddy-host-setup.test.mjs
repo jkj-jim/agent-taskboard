@@ -7,6 +7,7 @@ import { test } from "node:test";
 import {
   ensureMcpRegistration,
   verifyMcpEndpoint,
+  verifyMcpRegistration,
   workbuddyMcpConfigPath,
   workbuddyServerNameForProfile,
 } from "../server/workbuddy-host-setup.mjs";
@@ -18,6 +19,58 @@ test("each profile gets its own MCP name so approvals never cross", () => {
     workbuddyServerNameForProfile("production"),
     workbuddyServerNameForProfile("beta"),
   );
+});
+
+test("registration verification checks WorkBuddy's profile entry, URL and enabled state", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "workbuddy-home-"));
+  try {
+    const configPath = workbuddyMcpConfigPath(home);
+    await mkdir(path.dirname(configPath), { recursive: true });
+    const verifyEndpoint = async (url) => ({ ok: true, detail: "", url });
+
+    const absent = await verifyMcpRegistration({
+      origin: "http://127.0.0.1:47824",
+      serverName: "agent-taskboard",
+      homeDirectory: home,
+      verifyEndpoint,
+    });
+    assert.equal(absent.ok, false);
+    assert.match(absent.detail, /没有 agent-taskboard MCP 配置/);
+
+    await writeFile(configPath, JSON.stringify({ mcpServers: {
+      "agent-taskboard": {
+        type: "http",
+        url: "http://127.0.0.1:47825/mcp",
+        disabled: false,
+      },
+    } }), "utf8");
+    const wrongProfile = await verifyMcpRegistration({
+      origin: "http://127.0.0.1:47824",
+      serverName: "agent-taskboard",
+      homeDirectory: home,
+      verifyEndpoint,
+    });
+    assert.equal(wrongProfile.ok, false);
+    assert.match(wrongProfile.detail, /没有指向当前看板/);
+
+    await writeFile(configPath, JSON.stringify({ mcpServers: {
+      "agent-taskboard": {
+        type: "http",
+        url: "http://127.0.0.1:47824/mcp",
+        disabled: false,
+      },
+    } }), "utf8");
+    const valid = await verifyMcpRegistration({
+      origin: "http://127.0.0.1:47824",
+      serverName: "agent-taskboard",
+      homeDirectory: home,
+      verifyEndpoint,
+    });
+    assert.equal(valid.ok, true);
+    assert.equal(valid.url, "http://127.0.0.1:47824/mcp");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("writing the registration backs up the previous config and never loses other servers", async () => {

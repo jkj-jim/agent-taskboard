@@ -78,6 +78,12 @@ export type AgentStartResult =
       runId: string;
     }
   | {
+      /** 平台可用但它的客户端还在拉起；就绪后服务端自己补派发。 */
+      status: "preparing";
+      agentKind: AgentKind;
+      message: string;
+    }
+  | {
       status: "failed";
       agentKind: AgentKind;
       error: string;
@@ -128,6 +134,11 @@ export type NativeCodexTaskLaunchResult =
       status: "prepared";
       agentKind: "codex";
       task: Task;
+    }
+  | {
+      status: "preparing";
+      agentKind: "codex";
+      message: string;
     }
   | {
       status: "started";

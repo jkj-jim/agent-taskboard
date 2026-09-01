@@ -420,6 +420,23 @@ export async function launchNativeCodexTask(
 }
 
 /**
+ * 让看板把 Codex 客户端拉起来并装上注入器。立刻返回，冷启动在后台继续，
+ * 状态区会随下一次探测转成已接上。
+ */
+export async function connectCodexDesktop(): Promise<{ state: string }> {
+  return request<{ state: string }>("/api/local/codex/connect", { method: "POST" });
+}
+
+/** 由用户确认后重启 WorkBuddy，并以看板控制所需的调试端口重新连接。 */
+export async function connectWorkbuddyDesktop(): Promise<{
+  state: string;
+  restarted: boolean;
+  port: number;
+}> {
+  return request("/api/local/workbuddy/connect", { method: "POST" });
+}
+
+/**
  * WorkBuddy has no URL scheme, so bringing one of its sessions back to the
  * front means asking the board to drive its client.
  */

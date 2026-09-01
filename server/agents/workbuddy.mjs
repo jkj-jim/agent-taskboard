@@ -1,6 +1,9 @@
 import { ApiError } from "../database.mjs";
 import { agentByKind } from "../../shared/agents.mjs";
-import { CONFIGURE_WORKBUDDY_ACTION } from "../../shared/agent-runtime.mjs";
+import {
+  CONFIGURE_WORKBUDDY_ACTION,
+  CONNECT_WORKBUDDY_ACTION,
+} from "../../shared/agent-runtime.mjs";
 import { createWorkbuddyDesktopController } from "../workbuddy-desktop-controller.mjs";
 
 const definition = agentByKind("workbuddy");
@@ -47,39 +50,32 @@ export function createWorkbuddyAgent(config = {}) {
     },
 
     async status() {
-      const inspected = await desktopController.inspect();
-      if (!inspected.available) {
-        // 装没装、能不能连，controller 只回一个 available；无法再细分时按
-        // needs_setup 呈现并给出下载页，不谎称已确认未安装。
-        return {
-          status: "needs_setup",
-          transports: [],
-          reasonCode: "AGENT_NOT_INSTALLED",
-          statusMessage: `${definition.label} 未在运行，或没有开启看板需要的调试端口`
-            + `${inspected.detail ? `（${inspected.detail}）` : ""}。`,
-          // 不引导下载：装没装由用户自己管；这里给的是「点一下就配好」的入口（§11）。
-          action: CONFIGURE_WORKBUDDY_ACTION,
-        };
-      }
-      // §11 的验收要求是「MCP 握手并确认 Taskboard tools 可列出」才算 ready，
-      // 只看客户端在不在会把「连不上看板」误报成可用。
-      const handshake = await verifyBoardMcp().catch((error) => ({
-        ok: false,
-        detail: error instanceof Error ? error.message : String(error),
-      }));
-      if (!handshake.ok) {
+      // MCP 与桌面控制是两条独立前置条件。先并发检查，才能把「MCP 已配、
+      // 只是普通启动没开调试端口」和「MCP 本身没配好」准确地区分开。
+      const [inspected, boardMcp] = await Promise.all([
+        desktopController.inspect(),
+        verifyBoardMcp().catch((error) => ({
+          ok: false,
+          detail: error instanceof Error ? error.message : String(error),
+        })),
+      ]);
+      if (!boardMcp.ok) {
         return {
           status: "needs_setup",
           transports: [],
           reasonCode: "WORKBUDDY_AUTH_REQUIRED",
-          statusMessage: `${definition.label} 还没有连上看板的 MCP：${handshake.detail}`,
-          action: {
-            kind: "app-action",
-            label: "去 WorkBuddy 授权",
-            message: "打开 WorkBuddy 的 MCP 服务管理，允许看板这一项后回到这里重新检测。",
-            autoRunnable: true,
-            actionId: "configure-workbuddy",
-          },
+          statusMessage: `${definition.label} 还没有连上看板的 MCP：${boardMcp.detail}`,
+          action: CONFIGURE_WORKBUDDY_ACTION,
+        };
+      }
+      if (!inspected.available) {
+        return {
+          status: "needs_setup",
+          transports: [],
+          reasonCode: "WORKBUDDY_DESKTOP_UNAVAILABLE",
+          statusMessage: `${definition.label} 的 MCP 已连接，但桌面客户端没有开启看板控制`
+            + `${inspected.detail ? `（${inspected.detail}）` : ""}。`,
+          action: CONNECT_WORKBUDDY_ACTION,
         };
       }
       return { status: "ready", transports: ["host-draft", "host-submit"] };

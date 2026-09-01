@@ -1,10 +1,12 @@
 import { useState } from "react";
 
-import { RUNTIME_STATE_LABELS, runSetupAction } from "../agentRuntime";
+import { runSetupAction, runtimeStateLabel } from "../agentRuntime";
 import { AGENTS, agentLabel } from "../agents";
 import {
   applySkillTemplate,
   configureWorkbuddy,
+  connectCodexDesktop,
+  connectWorkbuddyDesktop,
   getSkillStatus,
   type SkillStatus,
 } from "../api";
@@ -117,7 +119,7 @@ export function AgentStatusBar({ agents, loaded, refreshing, onRefresh }: AgentS
             <span className={`agent-status-dot agent-status-dot-${state}`} aria-hidden="true" />
             <span className="agent-status-name">{agentLabel(definition.kind)}</span>
             <span className="agent-status-state">
-              {RUNTIME_STATE_LABELS[state]}
+              {runtimeStateLabel(runtime)}
               {runtime?.stale ? "（沿用上次结果）" : ""}
             </span>
             {action && (
@@ -132,6 +134,28 @@ export function AgentStatusBar({ agents, loaded, refreshing, onRefresh }: AgentS
                       getSkillStatus().then(setSkill, (error) => setNotice(String(error)));
                     },
                     notify: setNotice,
+                    connectWorkbuddyDesktop: () => {
+                      const confirmed = window.confirm(
+                        "连接看板需要完全退出并重新打开 WorkBuddy。请先保存未发送的草稿。现在继续吗？",
+                      );
+                      if (!confirmed) return;
+                      setNotice("正在重新连接 WorkBuddy…");
+                      connectWorkbuddyDesktop().then(
+                        () => {
+                          setNotice("WorkBuddy 已重新连接。");
+                          onRefresh();
+                        },
+                        (error) => setNotice(`连接 WorkBuddy 失败：${String(error)}`),
+                      );
+                    },
+                    // 冷启动要二三十秒，所以只报「已开始」，就绪与否交给状态探测。
+                    connectCodexDesktop: () => {
+                      setNotice("正在拉起 Codex 客户端，就绪后状态会自动更新…");
+                      connectCodexDesktop().then(
+                        () => window.setTimeout(onRefresh, 5_000),
+                        (error) => setNotice(`拉起 Codex 失败：${String(error)}`),
+                      );
+                    },
                     configureWorkbuddy: () => {
                       setNotice("正在配置 WorkBuddy 的看板连接…");
                       configureWorkbuddy().then(

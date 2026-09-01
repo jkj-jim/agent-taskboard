@@ -46,6 +46,9 @@ export function createAgentLaunchCoordinator({
   runHeadless,
   runNative,
   runHost,
+  // 补派发要用任务的当前版本重跑，不能拿等待前那个版本去 CAS。
+  reloadTask = null,
+  reportDeferred = () => {},
 }) {
   // 并发合并：同一任务、版本和触发来源在同一时刻只跑一次，防止一次状态变化
   // 因为重复请求同时起两个 session。跨请求的持久去重由各 launcher 依据
@@ -67,6 +70,42 @@ export function createAgentLaunchCoordinator({
       ...(setupAction ? { setupAction } : {}),
       error: message.slice(0, 2_000),
     };
+  }
+
+  /**
+   * 等 Agent 的客户端就绪后补派发一次。等待期间任务可能被改过，所以重新读一遍
+   * 并用它当前的版本，而不是拿等待前那个版本去撞 CAS。结果只有服务端可见，
+   * 因为发起那次请求的响应早就返回了——成功会通过会话绑定的 `task.updated`
+   * 事件出现在界面上，失败则由该 Agent 的状态灯继续如实呈现。
+   */
+  function deferLaunch(agent, ready, request) {
+    ready.then(
+      async () => {
+        const task = reloadTask ? await reloadTask(request.task.id) : request.task;
+        if (!task) return null;
+        return run({ ...request, task, expectedVersion: task.version, prepared: true });
+      },
+      (error) => failure(
+        agent.id,
+        null,
+        "AGENT_NOT_READY",
+        error instanceof Error ? error.message : String(error),
+        null,
+      ),
+    ).then(
+      (result) => reportDeferred({ agentKind: agent.id, taskId: request.task.id, result }),
+      (error) => reportDeferred({
+        agentKind: agent.id,
+        taskId: request.task.id,
+        result: failure(
+          agent.id,
+          null,
+          "AGENT_NOT_READY",
+          error instanceof Error ? error.message : String(error),
+          null,
+        ),
+      }),
+    );
   }
 
   async function run(request) {
@@ -93,6 +132,23 @@ export function createAgentLaunchCoordinator({
         runtime.statusMessage ?? `${agent.label} 当前不可用`,
         runtime.action,
       );
+    }
+
+    // 平台可用但它的客户端还没接上：先接受这次请求，后台接上之后再补派发。
+    // `request.prepared` 挡住第二轮——补派发时若又没接上，说明刚拉起来就掉了，
+    // 这时该如实失败，而不是无限地再拉一次。
+    if (!request.prepared && agent.prepareLaunch) {
+      const preparing = await agent.prepareLaunch({ trigger }).catch((error) => {
+        throw error instanceof Error ? error : new Error(String(error));
+      });
+      if (preparing?.ready) {
+        deferLaunch(agent, preparing.ready, request);
+        return {
+          status: "preparing",
+          agentKind: agent.id,
+          message: preparing.message ?? `正在准备 ${agent.label}，就绪后自动开始。`,
+        };
+      }
     }
 
     const selection = selectTransport({

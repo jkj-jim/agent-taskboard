@@ -120,6 +120,12 @@ server/
 
 一期安装版只加载 `codex-automation.user.js`。开发命令可同时加载 automation bridge 和 panel。
 
+桥接由看板自己拉起，不要求用户先在仓库里跑命令：`server/codex-bridge.mjs` 以子进程方式运行随包的 `scripts/codex-injector.mjs`（`--automation-only --shared-profile --no-supervisor`），注入逻辑因此只有一份实现。拉起策略按 Codex 主进程在不在决定——不在就用它自己的 Electron 用户目录带调试端口启动（单窗口，看板退出时不关闭它），在就另开隔离实例（单实例锁不允许给已运行的进程补端口）。桥接不是一次性动作：注入器要常驻写心跳，`CAPABILITY_EXPRESSION` 只认 8 秒内的。
+
+触发点有两个，共用同一个幂等的 `ensure()`：状态区的 `connect-codex-desktop` 动作，以及派发前的 `agent.prepareLaunch()`。冷启动要二三十秒，所以派发路径**先接受请求并返回 `preparing`**，就绪后由协调器用任务的当前版本补派发一次（不是等待前那个版本，否则必然撞 CAS）；补派发不再准备第二次，避免「准备 → 派发 → 又没接上 → 再准备」打转。补派发的结果没有请求可回，成功通过会话绑定的 `task.updated` 出现在界面上，失败落日志，用户看到的仍是 Codex 状态灯上的原因。
+
+`inject/` 与注入器所需的三个脚本必须进 Resources：缺了不会报错，只会让这条路静默退化成待配置，所以由打包校验步骤兜住。
+
 约束：
 
 - 通用 UI、API route 和共享模块不新增按 Agent 名称分支；
@@ -184,6 +190,7 @@ Tauri 启动 sidecar 时传入：
 --static-directory <resources>/web
 --skill-path ~/.agents/skills/manage-taskboard
 --taskctl-cli-path <resources>/cli/taskctl.mjs
+--codex-injector-path <resources>/scripts/codex-injector.mjs
 ```
 
 sidecar 参数落点：
@@ -200,6 +207,7 @@ sidecar 参数落点：
 | `--static-directory` | `resolveServerOptions().staticDirectory` |
 | `--skill-path` | `resolveServerOptions().skillPath` |
 | `--taskctl-cli-path` | 新增的 `resolveServerOptions().taskctlCliPath` |
+| `--codex-injector-path` | `resolveServerOptions().codexInjectorPath`，`server/codex-bridge.mjs` 拉起 Codex 桥接时跑的就是它 |
 
 实现要求：
 
@@ -207,9 +215,9 @@ sidecar 参数落点：
 - sidecar 启动时先校验 `--app-version` 与自身生成常量完全相等，并校验完整版本的 pre-release 状态与 `--profile` 对应；不匹配时在打开 SQLite 前退出，避免 Tauri 与 sidecar 资源版本错配；
 - CLI 参数优先级高于 `CODEX_TASKBOARD_*` 环境变量，环境变量高于开发版默认值；
 - `createTaskctlRuntime()` 使用 `resolved.taskctlCliPath`，不得再直接拼接 `PROJECT_ROOT/cli/taskctl.mjs`；
-- 安装版启动必须显式传入 runtime、static、skill、taskctl CLI 四个状态或资源路径；缺失时立即报错，不回退到 `PROJECT_ROOT`；
+- 安装版启动必须显式传入 runtime、static、skill、taskctl CLI、Codex 注入器五个状态或资源路径；缺失时立即报错，不回退到 `PROJECT_ROOT`；
 - `PROJECT_ROOT` 默认值只服务于 `npm run dev` 和测试；
-- 为十个参数、profile/version 配对、优先级、缺失参数和包含空格的 App Data 路径增加启动参数契约测试。
+- 为十一个参数、profile/version 配对、优先级、缺失参数和包含空格的 App Data 路径增加启动参数契约测试。
 
 生命周期：
 
@@ -361,6 +369,7 @@ type RuntimeSetupAction =
 | --- | --- |
 | `CLAUDE_AUTH_REQUIRED` | `terminal-command: claude auth login` |
 | `CODEX_AUTH_REQUIRED` | `app-action: open-codex-login` |
+| `CODEX_DESKTOP_UNAVAILABLE` | `terminal-command: npm run codex`（仅在看板自己也拉不起来时） |
 | `WORKBUDDY_AUTH_REQUIRED` | `app-action: open-workbuddy-authorization` |
 | `SKILL_LINK_CONFLICT` | `internal-route: /settings/skills/manage-taskboard` |
 | `AGENT_NOT_INSTALLED` | 对应 Agent 官方下载页的 `external-url` |
@@ -382,7 +391,9 @@ type AgentRuntimeStatus = {
 };
 ```
 
-`AGENT_RUNTIME_REASON_CODES` 由 `shared/agent-runtime.mjs` 导出，首期只包含上表六个 reason code；服务端在返回前校验，Web 从常量推导联合类型。`statusMessage` 只解释“为什么处于当前状态”，`RuntimeSetupAction.message` 只解释“执行该动作会发生什么”；状态区先展示前者，动作说明随按钮或操作入口展示，不在两者之间临时择一。
+`AGENT_RUNTIME_REASON_CODES` 由 `shared/agent-runtime.mjs` 导出，只包含上表列出的 reason code；服务端在返回前校验，Web 从常量推导联合类型。
+
+`status` 回答的是「看板现在能不能把任务交给这个平台」，不是「本机装没装」，也不是「此刻连着没有」。判定口径按该 Agent 实际的启动方式定：Codex 的任务启动没有 headless 兜底（见下方 transport 表），需要一个挂了注入器的客户端；但那个客户端由看板自己拉起（§3），所以判据是「拉不拉得起来」——CLI 已登录且 ChatGPT.app 与随包注入器都在，就是 `ready`，同时带上 `connect-codex-desktop` 动作让用户能立刻手动接上。两者有一个不成立才是 `needs_setup` / `CODEX_DESKTOP_UNAVAILABLE`，因为那时 Codex 会从负责人下拉里消失，只有真的交不出去才允许落到这一档。装没装与接不接得上是两件事，后者不复用 `AGENT_NOT_INSTALLED`，否则动作会退化成下载页。`statusMessage` 只解释“为什么处于当前状态”，`RuntimeSetupAction.message` 只解释“执行该动作会发生什么”；状态区先展示前者，动作说明随按钮或操作入口展示，不在两者之间临时择一。
 
 `unknown` 只表示本次无法得出 Agent 状态，不等同于确认不可用：没有上次结果且探测超时或异常时，返回 `status: "unknown"`、`reasonCode: "AGENT_STATUS_UNKNOWN"`、空 `transports` 和 `refresh-agent-status` 动作，`checkedAt` 记录本次探测结束时间且 `stale: false`；已有上次结果时仍沿用原状态并标记 `stale: true`，不改写为 `unknown`。
 
@@ -476,7 +487,7 @@ type LaunchRequest = {
 
 | 已指定 Agent | 手动“在对话中打开” | 自动任务触发 | 失败处理 |
 | --- | --- | --- | --- |
-| Codex | automation ready 时 `native-draft` | automation ready 时 `native-submit` | 返回 `failed(reasonCode, setupAction)`；不得静默改用 WorkBuddy 或 Claude |
+| Codex | `native-draft`（客户端没接上时先 `preparing`，就绪后补派发） | `native-submit`（同上） | 返回 `failed(reasonCode, setupAction)`；不得静默改用 WorkBuddy 或 Claude |
 | Claude Code | deep link 可用时打开草稿，否则 `headless` | `headless` | 返回 Claude 的登录或安装动作 |
 | WorkBuddy | host ready 时 `host-draft` / `host-submit` | `host-submit` | 返回 MCP、授权或宿主启动动作 |
 

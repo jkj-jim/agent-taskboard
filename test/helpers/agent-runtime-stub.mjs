@@ -28,3 +28,21 @@ export function readyAgentRuntimeStatuses(overrides = {}) {
     hasFresh: () => true,
   };
 }
+
+/**
+ * 用例不能让「本机装没装 Codex 客户端、仓库里有没有注入器」决定结论：真机上两者
+ * 都在，`/api/meta` 就会报 `nativeCodexTaskLaunch: true`，CI 上又是 false。
+ * 默认存根固定成「拉不起来」；要验拉起路径的用例自己传 overrides。
+ */
+export function offlineCodexBridge(overrides = {}) {
+  return {
+    supported: () => ({ ok: false, reason: "测试环境不拉起 Codex 客户端" }),
+    state: () => "down",
+    lastError: () => null,
+    ensure: async () => {
+      throw new Error("测试环境不拉起 Codex 客户端");
+    },
+    stop: () => {},
+    ...overrides,
+  };
+}

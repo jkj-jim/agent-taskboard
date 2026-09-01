@@ -34,6 +34,10 @@
       "../shared": "shared",
       "../cli": "cli",
       "../skills": "skills",
+      "../inject": "inject",
+      "../scripts/codex-injector.mjs": "scripts/codex-injector.mjs",
+      "../scripts/codex-injector-runtime.mjs": "scripts/codex-injector-runtime.mjs",
+      "../scripts/codex-rate-limits.mjs": "scripts/codex-rate-limits.mjs",
       "../dist/web": "dist/web"
     },
     "macOS": {

@@ -87,7 +87,13 @@ jobs:
         run: npm run sidecar:node
 
       - name: 随包 Node 上跑完整测试
-        run: ./src-tauri/binaries/node-aarch64-apple-darwin --test
+        # 分两次跑而不是一次扫全部：test/slow 里那个用例要拉起真的 wrangler 与
+        # Miniflare，单独就要 76 秒，和其余用例并行会把整台机器压满——被压住的
+        # 用例里有若干在关键路径上等子进程（读 Codex catalog 是 10 秒上限），
+        # 尾部一对齐就超时。顺序跑覆盖面不变，但彼此不再抢资源。
+        run: |
+          ./src-tauri/binaries/node-aarch64-apple-darwin --test test/*.test.mjs
+          ./src-tauri/binaries/node-aarch64-apple-darwin --test test/slow/*.test.mjs
 
       - name: 前端静态产物
         run: npm run build:web
