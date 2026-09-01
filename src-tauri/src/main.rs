@@ -9,7 +9,7 @@ mod update;
 use std::sync::Arc;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 /// 菜单里「检查更新…」的 id。production 触发检查，beta 打开 Release 列表。
 const CHECK_UPDATE_ITEM: &str = "check-update";
@@ -139,12 +139,6 @@ fn main() {
                 .join("skills")
                 .join("manage-taskboard")
                 .join("SKILL.md");
-
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("Agent Taskboard")
-                .inner_size(1280.0, 860.0)
-                .min_inner_size(960.0, 640.0)
-                .build()?;
 
             {
                 let focus_handle = handle.clone();

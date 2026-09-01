@@ -8,7 +8,17 @@
     "beforeBuildCommand": "npm run build:web"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agent Taskboard",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "dragDropEnabled": false
+      }
+    ],
     "withGlobalTauri": true,
     "security": {
       "csp": null

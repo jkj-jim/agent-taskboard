@@ -13,6 +13,10 @@ const contextMenuSource = await readFile(new URL("../web/src/components/TaskCont
 const cardSource = await readFile(new URL("../web/src/components/TaskCard.tsx", import.meta.url), "utf8");
 const filterSource = await readFile(new URL("../web/src/taskFilters.ts", import.meta.url), "utf8");
 const typesSource = await readFile(new URL("../web/src/types.ts", import.meta.url), "utf8");
+const tauriMainSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const tauriConfig = JSON.parse(
+  await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
+);
 
 function workflowStatuses() {
   const match = typesSource.match(/export const TASK_STATUSES = (\[[\s\S]*?\]) as const/);
@@ -43,6 +47,17 @@ test("dragging previews the insertion rank before committing it", () => {
   assert.match(appSource, /setTasks\(\(current\) => sortTasks\(current\.map/);
   assert.match(appSource, /setSettlingTaskId\(task\.id\)/);
   assert.match(styles, /\.task-card\.is-settling \{[\s\S]*?task-card-settle 200ms/);
+});
+
+test("the desktop shell leaves internal drag and drop to the web frontend", () => {
+  const mainWindow = tauriConfig.app.windows.find((window) => window.label === "main");
+  assert.ok(mainWindow, "the main window must be configured before Tauri builds it");
+  assert.equal(mainWindow.dragDropEnabled, false);
+  assert.doesNotMatch(
+    tauriMainSource,
+    /WebviewWindowBuilder::new\(app, "main"/,
+    "a dynamically built window bypasses tauri.conf.json dragDropEnabled",
+  );
 });
 
 test("text selection is reserved for editable fields", () => {
