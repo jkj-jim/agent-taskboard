@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { ApiError } from "./database.mjs";
 import { DEFAULT_AGENT_KIND, spawnAgentTurn } from "./agents/index.mjs";
+import { withProxyEnv } from "./agents/proxy-env.mjs";
 
 /** The single sandbox tier every board-run turn uses; see `createThread`. */
 const FIXED_SANDBOX = "workspace-write";
@@ -46,6 +47,7 @@ export class AiChatService {
     this.manageTaskboardSkillPath = options.manageTaskboardSkillPath;
     this.processEnv = options.processEnv ?? process.env;
     this.taskctlRuntime = options.taskctlRuntime ?? null;
+    this.resolveProxyEnv = options.resolveProxyEnv ?? withProxyEnv;
     this.onIssueSession = options.onIssueSession ?? null;
     this.killGraceMs = options.killGraceMs ?? 1_000;
     this.active = new Map();
@@ -99,11 +101,17 @@ export class AiChatService {
     return this.agents.getHeadless(agentKind).catalog(projectId);
   }
 
-  /** The environment an agent turn runs in, with `taskctl` on its PATH. */
+  /**
+   * The environment an agent turn runs in, with `taskctl` on its PATH and the
+   * proxy the host is actually using. The proxy is probed per turn rather than
+   * cached at startup: the board is long-lived and the user can switch or stop
+   * their proxy client under it.
+   */
   async #turnEnv() {
-    return this.taskctlRuntime
-      ? this.taskctlRuntime.environment(this.processEnv)
+    const base = this.taskctlRuntime
+      ? await this.taskctlRuntime.environment(this.processEnv)
       : this.processEnv;
+    return this.resolveProxyEnv(base);
   }
 
   async createThread(input) {

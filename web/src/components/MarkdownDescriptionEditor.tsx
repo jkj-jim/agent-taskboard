@@ -4,7 +4,7 @@ import { Markdown } from "@tiptap/markdown";
 import { TableKit } from "@tiptap/extension-table";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, type KeyboardEvent } from "react";
 
 const DESCRIPTION_EXTENSIONS = [
   StarterKit.configure({
@@ -26,21 +26,30 @@ const DESCRIPTION_EXTENSIONS = [
   }),
 ];
 
+export interface MarkdownDescriptionEditorHandle {
+  focus: () => void;
+}
+
 interface MarkdownDescriptionEditorProps {
   value: string;
   disabled: boolean;
+  className?: string;
+  autoFocus?: boolean;
   onChange: (value: string) => void;
   onCancel: () => void;
   onSave: (value: string) => void | Promise<void>;
 }
 
-export default function MarkdownDescriptionEditor({
+const MarkdownDescriptionEditor = forwardRef<MarkdownDescriptionEditorHandle, MarkdownDescriptionEditorProps>(
+  function MarkdownDescriptionEditor({
   value,
   disabled,
+  className = "",
+  autoFocus = true,
   onChange,
   onCancel,
   onSave,
-}: MarkdownDescriptionEditorProps) {
+}, ref) {
   const cancelingRef = useRef(false);
   const savingRef = useRef(false);
   const blurReadyRef = useRef(false);
@@ -81,10 +90,14 @@ export default function MarkdownDescriptionEditor({
   }, [editor, value]);
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || !autoFocus) return;
     const frame = requestAnimationFrame(() => editor.commands.focus("end"));
     return () => cancelAnimationFrame(frame);
-  }, [editor]);
+  }, [editor, autoFocus]);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => editor?.commands.focus("end"),
+  }), [editor]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
@@ -113,10 +126,13 @@ export default function MarkdownDescriptionEditor({
   return (
     <div
       ref={shellRef}
-      className={`issue-description-tiptap-shell${empty ? " empty" : ""}${disabled ? " is-disabled" : ""}`}
+      className={`issue-description-tiptap-shell${empty ? " empty" : ""}${disabled ? " is-disabled" : ""}${className ? ` ${className}` : ""}`}
       onKeyDown={handleKeyDown}
     >
       <EditorContent editor={editor} />
     </div>
   );
-}
+},
+);
+
+export default MarkdownDescriptionEditor;

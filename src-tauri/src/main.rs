@@ -2,6 +2,7 @@
 
 mod app_identity;
 mod app_version;
+mod external_links;
 mod sidecar;
 mod single_instance;
 mod update;
@@ -102,6 +103,8 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // 深链（`codex://`、`claude://`）要交给系统，WebView 自己打不开。
+        .plugin(external_links::plugin())
         .invoke_handler(tauri::generate_handler![retry_startup])
         .setup(move |app| {
             let handle = app.handle().clone();

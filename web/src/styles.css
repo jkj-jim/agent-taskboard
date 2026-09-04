@@ -6126,20 +6126,16 @@ kbd {
   line-height: 24px;
 }
 
-.inline-media-description {
-  min-height: 118px;
-  margin-top: 2px;
+.composer-description.issue-description-tiptap-shell {
+  width: 100%;
+  min-height: 100px;
+  margin: 2px 0 0;
   padding: 6px 0 12px;
 }
 
-.inline-media-description textarea {
-  min-height: 24px;
-  margin: 0;
-  padding: 0;
-}
-
-.inline-media-description > textarea:only-child {
-  min-height: 100px;
+.composer-description.issue-description-tiptap-shell.empty:not(:focus-within)::before {
+  top: 6px;
+  left: 0;
 }
 
 .composer-title input::placeholder,

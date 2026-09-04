@@ -9,6 +9,7 @@ import { AiChatService } from "../server/ai-chat.mjs";
 import { createAgentRegistry } from "../server/agents/index.mjs";
 import { normalizeCodexEvent } from "../server/ai-chat-process.mjs";
 import { SKILL_MARKER } from "../server/agents/prompt.mjs";
+import { withProxyEnv } from "../server/agents/proxy-env.mjs";
 import { waitFor } from "./helpers/wait-for.mjs";
 
 test("normalized item events retain a bounded public item id", () => {
@@ -26,7 +27,7 @@ test("normalized item events retain a bounded public item id", () => {
   assert.equal(normalized.data.itemId, itemId.slice(0, 65_536));
 });
 
-async function createFixture() {
+async function createFixture(overrides = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-runner-"));
   const workspacePath = path.join(directory, "workspace");
   const otherWorkspacePath = path.join(directory, "other-workspace");
@@ -71,7 +72,11 @@ if (args[0] === "app-server") {
   let prompt = "";
   process.stdin.on("data", (chunk) => { prompt += chunk; });
   process.stdin.on("end", () => {
-    appendFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({args,prompt}) + "\\n");
+    const proxyEnv = {};
+    for (const name of ["HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","NO_PROXY","no_proxy"]) {
+      if (process.env[name]) proxyEnv[name] = process.env[name];
+    }
+    appendFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({args,prompt,proxyEnv}) + "\\n");
     const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
     if (!args.includes("resume")) emit({type:"thread.started",thread_id:"codex-thread-1"});
     emit({type:"turn.started"});
@@ -151,7 +156,9 @@ if (args[0] === "app-server") {
       ...process.env,
       FAKE_CAPTURE_PATH: capturePath,
       FAKE_DESCENDANT_PATH: descendantPath,
+      ...overrides.processEnv,
     },
+    ...(overrides.resolveProxyEnv ? { resolveProxyEnv: overrides.resolveProxyEnv } : {}),
     killGraceMs: 50,
   });
   return {
@@ -170,6 +177,75 @@ if (args[0] === "app-server") {
     },
   };
 }
+
+// 安装版由 launchd 启动，环境里没有用户 shell 配的代理，Agent 直连会被拒（403）。
+// 这里走真实的 withProxyEnv，只把「读系统代理」和「探活」换成桩，验证代理确实落到
+// 了 spawn 出去的那个进程上，而不只是模块自己算对了。
+test("a turn spawned from a launchd-style environment carries the host proxy", async () => {
+  const scutil = async () => ({
+    stdout: "<dictionary> {\n  HTTPEnable : 1\n  HTTPProxy : 127.0.0.1\n  HTTPPort : 10808\n"
+      + "  HTTPSEnable : 1\n  HTTPSProxy : 127.0.0.1\n  HTTPSPort : 10808\n}",
+  });
+  const fixture = await createFixture({
+    // launchd 交给安装版的环境里一个代理变量都没有。
+    processEnv: {
+      HTTP_PROXY: undefined,
+      HTTPS_PROXY: undefined,
+      http_proxy: undefined,
+      https_proxy: undefined,
+      NO_PROXY: undefined,
+      no_proxy: undefined,
+    },
+    resolveProxyEnv: (env) => withProxyEnv(env, {
+      runCommand: scutil,
+      checkReachable: async () => true,
+    }),
+  });
+  try {
+    const thread = await fixture.service.createThread({
+      projectId: "project",
+      model: "gpt-real",
+      reasoningEffort: "high",
+      sandbox: "workspace-write",
+    });
+    const run = await fixture.service.startTurn(thread.id, { message: "proxy" });
+    await waitFor(() => fixture.service.getRun(run.id)?.status !== "running");
+
+    const [capture] = (await readFile(fixture.capturePath, "utf8")).trim().split("\n").map(JSON.parse);
+    assert.equal(capture.proxyEnv.HTTPS_PROXY, "http://127.0.0.1:10808");
+    assert.equal(capture.proxyEnv.https_proxy, "http://127.0.0.1:10808");
+    assert.equal(capture.proxyEnv.HTTP_PROXY, "http://127.0.0.1:10808");
+    // taskctl 回访看板自己的 127.0.0.1:<port>，本机地址不能走代理。
+    assert.match(capture.proxyEnv.NO_PROXY, /127\.0\.0\.1/);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a turn keeps the proxy the host environment already carries", async () => {
+  const fixture = await createFixture({
+    processEnv: { HTTPS_PROXY: "http://127.0.0.1:7897", NO_PROXY: "localhost" },
+    resolveProxyEnv: (env) => withProxyEnv(env, {
+      runCommand: async () => assert.fail("the system proxy must not override an explicit one"),
+      checkReachable: async () => true,
+    }),
+  });
+  try {
+    const thread = await fixture.service.createThread({
+      projectId: "project",
+      model: "gpt-real",
+      reasoningEffort: "high",
+      sandbox: "workspace-write",
+    });
+    const run = await fixture.service.startTurn(thread.id, { message: "proxy" });
+    await waitFor(() => fixture.service.getRun(run.id)?.status !== "running");
+
+    const [capture] = (await readFile(fixture.capturePath, "utf8")).trim().split("\n").map(JSON.parse);
+    assert.equal(capture.proxyEnv.HTTPS_PROXY, "http://127.0.0.1:7897");
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized visible events", async () => {
   const fixture = await createFixture();

@@ -23,7 +23,7 @@ import path from "node:path";
  * 猜哪个版本不如让用户显式指定，所以那种情况仍然要靠 `CODEX_EXECUTABLE` /
  * `CLAUDE_EXECUTABLE` 给绝对路径。
  */
-export function agentToolDirectories(home = os.homedir()) {
+export function agentToolDirectories(home = os.homedir(), execPath = process.execPath) {
   return [
     path.join(home, ".local", "bin"),
     "/opt/homebrew/bin",
@@ -32,14 +32,18 @@ export function agentToolDirectories(home = os.homedir()) {
     path.join(home, ".bun", "bin"),
     path.join(home, ".volta", "bin"),
     path.join(home, ".npm-global", "bin"),
+    // 兜底的 `node`：安装版随包带了一个（sidecar 自己就跑在上面），而用户的 node
+    // 常来自 nvm，路径带版本号，猜不出来。Agent 的 hook 和插件脚本用 `/bin/sh -c`
+    // 起 `node ...`，找不到就每轮以 127 失败。放在最后，用户自己的 node 优先。
+    path.dirname(execPath),
   ];
 }
 
 /** 用户 PATH 在前，补充目录在后；重复项去掉，避免 PATH 越接越长。 */
-export function withAgentToolsOnPath(env = process.env, home = os.homedir()) {
+export function withAgentToolsOnPath(env = process.env, home = os.homedir(), execPath = process.execPath) {
   const existing = (env.PATH ?? "").split(path.delimiter).filter(Boolean);
   const merged = [];
-  for (const directory of [...existing, ...agentToolDirectories(home)]) {
+  for (const directory of [...existing, ...agentToolDirectories(home, execPath)]) {
     if (!merged.includes(directory)) merged.push(directory);
   }
   return { ...env, PATH: merged.join(path.delimiter) };

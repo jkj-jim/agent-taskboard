@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { ApiError } from "../api";
 import {
@@ -31,15 +31,10 @@ import {
   MAX_ATTACHMENT_SIZE,
   PendingAttachments,
 } from "./PendingAttachments";
-import {
-  createInlineMediaSegments,
-  InlineMediaComposer,
-  inlineMediaImages,
-  serializeInlineMedia,
-  type InlineMediaComposerHandle,
-  type InlineMediaSegment,
-  type PendingInlineImage,
-} from "./InlineMediaComposer";
+import type { PendingInlineImage } from "./InlineMediaComposer";
+import type { MarkdownDescriptionEditorHandle } from "./MarkdownDescriptionEditor";
+
+const MarkdownDescriptionEditor = lazy(() => import("./MarkdownDescriptionEditor"));
 
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
   none: "无优先级",
@@ -125,13 +120,10 @@ export function TaskEditor({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
-  const composerRef = useRef<InlineMediaComposerHandle>(null);
+  const descriptionEditorRef = useRef<MarkdownDescriptionEditorHandle>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
-  const [descriptionSegments, setDescriptionSegments] = useState<InlineMediaSegment[]>(
-    () => createInlineMediaSegments(),
-  );
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? initialStatus);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "none");
   const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? defaultAssignee);
@@ -206,9 +198,7 @@ export function TaskEditor({
       const assigneeTarget = task && actorKey(assignee) === actorKey(task.assignee)
         ? undefined
         : assigneeTargetForActor(assignee, currentUser);
-      const descriptionValue = task
-        ? description.trim()
-        : serializeInlineMedia(descriptionSegments).trim();
+      const descriptionValue = description.trim();
       await onSave({
         title: cleanTitle,
         description: descriptionValue,
@@ -220,7 +210,7 @@ export function TaskEditor({
         developmentContext,
         dueDate: dueDate || null,
         recurrence,
-      }, attachments, inlineMediaImages(descriptionSegments));
+      }, attachments, []);
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "VERSION_CONFLICT") {
         setError("这个任务已在其他位置发生变更，请关闭并刷新后重试。");
@@ -241,7 +231,7 @@ export function TaskEditor({
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       return;
     }
-    composerRef.current?.focus();
+    descriptionEditorRef.current?.focus();
   }
 
   function addAttachments(files: FileList | File[]) {
@@ -302,16 +292,18 @@ export function TaskEditor({
               <textarea ref={descriptionRef} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add description…" rows={5} />
             </label>
           ) : (
-            <InlineMediaComposer
-              ref={composerRef}
-              className="composer-description inline-media-description"
-              segments={descriptionSegments}
-              placeholder="Add description…"
-              ariaLabel="描述"
-              disabled={saving}
-              onChange={setDescriptionSegments}
-              onError={setAttachmentError}
-            />
+            <Suspense fallback={<div className="composer-description issue-description-tiptap-shell empty" aria-hidden="true" />}>
+              <MarkdownDescriptionEditor
+                ref={descriptionEditorRef}
+                className="composer-description"
+                value={description}
+                disabled={saving}
+                autoFocus={false}
+                onChange={setDescription}
+                onCancel={() => { if (!saving) onCancel(); }}
+                onSave={() => {}}
+              />
+            </Suspense>
           )}
 
           {!task && (
